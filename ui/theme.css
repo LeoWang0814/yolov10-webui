@@ -1,0 +1,336 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&display=swap");
+
+:root {
+  --bg-1: #f3f3f3;
+  --bg-2: #f7f7f7;
+  --ink: #111111;
+  --muted: #5a5a5a;
+  --accent: #0066b8;
+  --panel: #ffffff;
+  --panel-2: #fbfbfb;
+  --border: #d0d0d0;
+  --shadow: 0 8px 22px rgba(20, 24, 28, 0.06);
+  --pad: 16px;
+  --pad-lg: 20px;
+}
+
+body,
+.gradio-container {
+  font-family: "IBM Plex Sans", sans-serif;
+  background: linear-gradient(180deg, var(--bg-1), var(--bg-2));
+  color: var(--ink);
+}
+
+.gradio-container {
+  padding: 12px;
+}
+
+h1,
+h2,
+h3 {
+  font-family: "IBM Plex Sans Condensed", sans-serif;
+  letter-spacing: 0.2px;
+}
+
+.block {
+  border-radius: 10px !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: var(--shadow);
+  background: var(--panel);
+  padding: var(--pad-lg) var(--pad-lg);
+}
+
+.app-hero {
+  padding: 18px 22px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+
+.status-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.pill {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 12px;
+}
+
+.accent-btn {
+  background: var(--accent) !important;
+  color: #fff !important;
+  border: none !important;
+}
+
+.secondary-btn {
+  background: #2b3136 !important;
+  color: #fff !important;
+  border: none !important;
+}
+
+.section-title {
+  font-weight: 600;
+  font-size: 16px;
+  margin-bottom: 4px;
+}
+
+.subtle {
+  color: var(--muted);
+}
+
+.gradio-container .tabs {
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.gradio-container .tabitem {
+  border-radius: 8px;
+}
+
+.gradio-container .tabitem .tab-nav button {
+  font-weight: 600;
+}
+
+.gradio-container input,
+.gradio-container textarea,
+.gradio-container select {
+  border-radius: 8px !important;
+  border: 1px solid var(--border) !important;
+  background: var(--panel-2) !important;
+  padding: 12px 14px !important;
+  line-height: 1.4;
+}
+
+.gradio-container .accordion {
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.gradio-container .accordion .label-wrap {
+  font-weight: 500;
+}
+
+.gradio-container .gallery {
+  border-radius: 10px;
+  border: 1px dashed var(--border);
+  background: var(--panel-2);
+}
+
+.gradio-container .gr-button {
+  border-radius: 8px !important;
+  font-weight: 600 !important;
+  padding: 10px 14px !important;
+}
+
+.gradio-container .gr-form {
+  gap: 20px;
+}
+
+.gradio-container .row {
+  gap: 22px;
+}
+
+.gradio-container label {
+  margin-bottom: 8px;
+}
+
+.gradio-container .gr-box {
+  padding: 8px;
+}
+
+.gradio-container .block .markdown,
+.gradio-container .gr-form .markdown {
+  padding-left: 14px;
+}
+
+.gradio-container .markdown h3,
+.gradio-container .markdown h4,
+.gradio-container .markdown p {
+  padding-left: 14px;
+}
+
+.gradio-container .markdown h1,
+.gradio-container .markdown h2 {
+  padding-left: 14px;
+}
+
+.gradio-container .tabitem .tab-content,
+.gradio-container .tab-content {
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+.gradio-container .gradio-radio label,
+.gradio-container .gradio-checkbox label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+}
+
+.gradio-container .gradio-radio input[type="radio"],
+.gradio-container .gradio-checkbox input[type="checkbox"] {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  display: inline-block;
+}
+
+.gradio-container .gradio-checkbox input[type="checkbox"] {
+  border-radius: 4px;
+}
+
+.gradio-container .gradio-radio input[type="radio"]:checked,
+.gradio-container .gradio-checkbox input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.gradio-container [data-testid="radio"] label,
+.gradio-container [data-testid="checkbox"] label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+}
+
+.gradio-container [data-testid="radio"] label:has(input:checked),
+.gradio-container [data-testid="checkbox"] label:has(input:checked) {
+  background: rgba(0, 102, 184, 0.12) !important;
+  border-color: var(--accent) !important;
+}
+
+.gradio-container [data-testid="radio"] input:checked,
+.gradio-container [data-testid="checkbox"] input:checked {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+}
+
+.gradio-container .tabitem .tab-nav button {
+  border: 1px solid var(--border);
+  background: transparent;
+}
+
+.gradio-container .tabitem .tab-nav button.selected,
+.gradio-container .tabitem .tab-nav button[aria-selected="true"] {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.gradio-container .gr-button:active {
+  background: var(--accent) !important;
+  color: #fff !important;
+  border-color: var(--accent) !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-1: #1e1e1e;
+    --bg-2: #1b1b1b;
+    --ink: #d4d4d4;
+    --muted: #9da3a6;
+    --accent: #569cd6;
+    --panel: #252526;
+    --panel-2: #2d2d2d;
+    --border: #3a3a3a;
+    --shadow: 0 10px 26px rgba(0, 0, 0, 0.45);
+  }
+
+  body,
+  .gradio-container {
+    background: linear-gradient(180deg, var(--bg-1), var(--bg-2));
+    color: var(--ink);
+  }
+
+  .app-hero {
+    background: var(--panel);
+  }
+
+  .secondary-btn {
+    background: #c8c8c8 !important;
+    color: #1f1f1f !important;
+  }
+
+  .gradio-container input,
+  .gradio-container textarea,
+  .gradio-container select {
+    background: #1f1f1f !important;
+    color: var(--ink) !important;
+    border-color: #3a3a3a !important;
+  }
+
+  .gradio-container .gallery {
+    background: #202020;
+  }
+
+  .pill {
+    background: #2a2a2a;
+    border-color: #3a3a3a;
+    color: var(--muted);
+  }
+
+  .gradio-container .tabs,
+  .gradio-container .accordion,
+  .block,
+  .app-hero {
+    background: var(--panel);
+    border-color: var(--border);
+  }
+
+  .gradio-container .gradio-radio label,
+  .gradio-container .gradio-checkbox label {
+    color: var(--muted);
+  }
+
+}
+
+/* ===== Fix: global padding and Gradio 3.x markdown containers ===== */
+.gradio-container {
+  padding: 16px !important;
+  box-sizing: border-box;
+}
+
+.gradio-container .prose,
+.gradio-container .markdown,
+.gradio-container .md {
+  padding-left: 14px !important;
+  padding-right: 14px !important;
+  box-sizing: border-box;
+}
+
+.gradio-container .prose h1,
+.gradio-container .prose h2,
+.gradio-container .markdown h1,
+.gradio-container .markdown h2,
+.gradio-container .md h1,
+.gradio-container .md h2 {
+  padding-left: 0 !important;
+}
+
+/* ===== Fix: restore native radio/checkbox indicators ===== */
+.gradio-container input[type="radio"],
+.gradio-container input[type="checkbox"] {
+  appearance: auto !important;
+  -webkit-appearance: auto !important;
+  accent-color: var(--accent) !important;
+}

@@ -1,0 +1,61 @@
+{
+  "schema_version": "1.0",
+  "project": "yolov10-webui",
+  "license": "AGPL-3.0",
+  "default_source": "github",
+  "releases": {
+    "v0.1.0": {
+      "date": "2026-01-08",
+      "models": {
+        "yolov8n": {
+          "filename": "yolov8n.pt",
+          "size_mb": 6.23,
+          "sha256": "31e20dde3def09e2cf938c7be6fe23d9150bbbe503982af13345706515f2ef95",
+          "sources": {
+            "github": "https://github.com/LeoWang0814/yolov10-webui/releases/download/Pretrained-model/yolov8n.pt"
+          }
+        },
+        "yolov10n": {
+          "filename": "yolov10n.pt",
+          "size_mb": 10.9,
+          "sha256": "61b91ffc99b284792dca49bf40216945833cc2a515e1a742954e6e9327cfc19e",
+          "sources": {
+            "github": "https://github.com/LeoWang0814/yolov10-webui/releases/download/Pretrained-model/yolov10n.pt"
+          }
+        },
+        "yolov10m": {
+          "filename": "yolov10m.pt",
+          "size_mb": 63.8,
+          "sha256": "ff2c559f11d13701abc4e0345f82851d146ecfe7035efaafcc08475cfd8b5f2d",
+          "sources": {
+            "github": "https://github.com/LeoWang0814/yolov10-webui/releases/download/Pretrained-model/yolov10m.pt"
+          }
+        },
+        "yolov10b": {
+          "filename": "yolov10b.pt",
+          "size_mb": 79.1,
+          "sha256": "3846434cbf0016b663a1ccd6d843c48468f6852f4feeddcb9f67f9182168c142",
+          "sources": {
+            "github": "https://github.com/LeoWang0814/yolov10-webui/releases/download/Pretrained-model/yolov10b.pt"
+          }
+        },
+        "yolov10l": {
+          "filename": "yolov10l.pt",
+          "size_mb": 99.6,
+          "sha256": "83769ec3cbc61f18113f612f8bdcf922396628d620682bb72966e9b148004b8b",
+          "sources": {
+            "github": "https://github.com/LeoWang0814/yolov10-webui/releases/download/Pretrained-model/yolov10l.pt"
+          }
+        },
+        "yolov10x": {
+          "filename": "yolov10x.pt",
+          "size_mb": 122,
+          "sha256": "6e6eae65e6c268c49a25849922e0c75a5c707d626d67170d16a97813b0f8eb79",
+          "sources": {
+            "github": "https://github.com/LeoWang0814/yolov10-webui/releases/download/Pretrained-model/yolov10x.pt"
+          }
+        }
+      }
+    }
+  }
+}
