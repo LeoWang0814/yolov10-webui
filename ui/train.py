@@ -34,16 +34,7 @@ def _build_advanced_inputs() -> Tuple[Dict[str, Any], Dict[str, Dict[str, Any]]]
 def build_train_tab() -> Dict[str, Any]:
     components: Dict[str, Any] = {}
     with gr.Tab("Train"):
-        gr.Markdown("###   Train")
-        with gr.Row():
-            with gr.Column(scale=5):
-                mode_label = gr.HTML("<div class='section-title'>Mode</div><div class='subtle'>Basic for quick starts, Advanced for full control.</div>")
-                components["mode_label"] = mode_label
-            with gr.Column(scale=7):
-                pass
-
         with gr.Group() as basic_group:
-            gr.Markdown("####   Basic Train")
             with gr.Row():
                 data_path = gr.Textbox(label="Dataset YAML Path (data)", placeholder="datasets/coco8.yaml")
                 validate_btn = gr.Button("Validate Data")
@@ -67,26 +58,37 @@ def build_train_tab() -> Dict[str, Any]:
                 )
                 local_model = gr.Textbox(
                     label="Local .pt Path",
-                    placeholder="weights/yolov10m.pt",
+                    placeholder="models/your_model.pt",
                     visible=False,
                 )
+            with gr.Row():
+                local_upload = gr.File(label="Upload .pt (saved to models/)", file_types=[".pt"], visible=False)
+                upload_status = gr.Textbox(label="Upload Status", interactive=False, visible=False)
             pretrained_hint = gr.Textbox(label="Model Status", interactive=False)
             components.update(
                 {
                     "model_source": model_source,
                     "pretrained_model": pretrained_model,
                     "local_model": local_model,
+                    "local_upload": local_upload,
+                    "upload_status": upload_status,
                     "pretrained_hint": pretrained_hint,
                 }
             )
 
             def _toggle_model_source(kind):
-                return gr.update(visible=kind == "Pretrained"), gr.update(visible=kind == "Local .pt")
+                show_local = kind == "Local .pt"
+                return (
+                    gr.update(visible=kind == "Pretrained"),
+                    gr.update(visible=show_local),
+                    gr.update(visible=show_local),
+                    gr.update(visible=show_local),
+                )
 
             model_source.change(
                 _toggle_model_source,
                 inputs=model_source,
-                outputs=[pretrained_model, local_model],
+                outputs=[pretrained_model, local_model, local_upload, upload_status],
             )
 
             with gr.Row():
@@ -168,7 +170,6 @@ def build_train_tab() -> Dict[str, Any]:
             components["cli_preview_basic"] = cli_preview_basic
 
         with gr.Group(visible=False) as advanced_group:
-            gr.Markdown("####   Advanced Train")
             adv_data_path = gr.Textbox(label="Dataset YAML Path (data)", placeholder="datasets/coco8.yaml")
             adv_model_source = gr.Radio(["Pretrained", "Local .pt"], value="Pretrained", label="Model Source")
             adv_pretrained_model = gr.Dropdown(
@@ -179,9 +180,11 @@ def build_train_tab() -> Dict[str, Any]:
             )
             adv_local_model = gr.Textbox(
                 label="Local .pt Path",
-                placeholder="weights/yolov10m.pt",
+                placeholder="models/your_model.pt",
                 visible=False,
             )
+            adv_local_upload = gr.File(label="Upload .pt (saved to models/)", file_types=[".pt"], visible=False)
+            adv_upload_status = gr.Textbox(label="Upload Status", interactive=False, visible=False)
             adv_pretrained_hint = gr.Textbox(label="Model Status", interactive=False)
             adv_run_name = gr.Textbox(label="Run Name (optional)", placeholder="exp-adv-001")
             components.update(
@@ -190,18 +193,26 @@ def build_train_tab() -> Dict[str, Any]:
                     "adv_model_source": adv_model_source,
                     "adv_pretrained_model": adv_pretrained_model,
                     "adv_local_model": adv_local_model,
+                    "adv_local_upload": adv_local_upload,
+                    "adv_upload_status": adv_upload_status,
                     "adv_pretrained_hint": adv_pretrained_hint,
                     "adv_run_name": adv_run_name,
                 }
             )
 
             def _toggle_adv_model_source(kind):
-                return gr.update(visible=kind == "Pretrained"), gr.update(visible=kind == "Local .pt")
+                show_local = kind == "Local .pt"
+                return (
+                    gr.update(visible=kind == "Pretrained"),
+                    gr.update(visible=show_local),
+                    gr.update(visible=show_local),
+                    gr.update(visible=show_local),
+                )
 
             adv_model_source.change(
                 _toggle_adv_model_source,
                 inputs=adv_model_source,
-                outputs=[adv_pretrained_model, adv_local_model],
+                outputs=[adv_pretrained_model, adv_local_model, adv_local_upload, adv_upload_status],
             )
             search = gr.Textbox(label="Search Params (key)", placeholder="imgsz, lr0, augment...")
             components["adv_search"] = search

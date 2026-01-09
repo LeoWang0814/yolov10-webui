@@ -213,6 +213,24 @@ def _log_exception(context: str, exc: Exception) -> None:
     traceback.print_exc()
 
 
+def _save_uploaded_model(file_obj) -> Tuple[str, str]:
+    if not file_obj:
+        return "", "No file selected."
+    src_path = _normalize_file_path(file_obj)
+    if not src_path:
+        return "", "Invalid upload."
+    src = Path(src_path)
+    if src.suffix.lower() != ".pt":
+        return "", "Only .pt files are supported."
+    dest_dir = ROOT / "models"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / src.name
+    if dest.exists():
+        return str(dest), f"Already exists: {dest}"
+    shutil.copy(src, dest)
+    return str(dest), f"Saved to {dest}"
+
+
 def _strip_ansi(text: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
@@ -239,7 +257,11 @@ def main() -> gr.Blocks:
             """
         )
         status_bar()
-        mode_switch = gr.Radio(["Basic", "Advanced"], value="Basic", label="Mode")
+        mode_switch = gr.Radio(
+            ["Basic", "Advanced"],
+            value="Basic",
+            label="Mode (Basic for quick starts, Advanced for full control.)",
+        )
 
         with gr.Tabs():
             train_ui = build_train_tab()
@@ -335,6 +357,26 @@ def main() -> gr.Blocks:
             outputs=train_ui["adv_pretrained_hint"],
         )
 
+        def _handle_upload(file_obj):
+            path, status = _save_uploaded_model(file_obj)
+            return (
+                gr.update(value=path),
+                gr.update(value="Local .pt"),
+                gr.update(value=status),
+            )
+
+        train_ui["local_upload"].change(
+            _handle_upload,
+            inputs=train_ui["local_upload"],
+            outputs=[train_ui["local_model"], train_ui["model_source"], train_ui["upload_status"]],
+        )
+
+        train_ui["adv_local_upload"].change(
+            _handle_upload,
+            inputs=train_ui["adv_local_upload"],
+            outputs=[train_ui["adv_local_model"], train_ui["adv_model_source"], train_ui["adv_upload_status"]],
+        )
+
         predict_ui["model_source"].change(
             _update_predict_hint,
             inputs=[predict_ui["model_source"], predict_ui["pretrained_model"], predict_ui["local_model"]],
@@ -365,6 +407,18 @@ def main() -> gr.Blocks:
             _update_predict_hint,
             inputs=[predict_ui["adv_model_source"], predict_ui["adv_pretrained_model"], predict_ui["adv_local_model"]],
             outputs=predict_ui["adv_pretrained_hint"],
+        )
+
+        predict_ui["local_upload"].change(
+            _handle_upload,
+            inputs=predict_ui["local_upload"],
+            outputs=[predict_ui["local_model"], predict_ui["model_source"], predict_ui["upload_status"]],
+        )
+
+        predict_ui["adv_local_upload"].change(
+            _handle_upload,
+            inputs=predict_ui["adv_local_upload"],
+            outputs=[predict_ui["adv_local_model"], predict_ui["adv_model_source"], predict_ui["adv_upload_status"]],
         )
 
         def _basic_train_args(
@@ -826,6 +880,10 @@ def main() -> gr.Blocks:
             ],
         )
         predict_ui["adv_stop"].click(_stop_train, inputs=None, outputs=predict_ui["adv_log"])
+
+        gr.HTML(
+            "<div class='app-footer'>WebUI developed by <a href='https://github.com/LeoWang0814' target='_blank'>LeoWang</a></div>"
+        )
 
     return demo
 

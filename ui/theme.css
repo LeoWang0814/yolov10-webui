@@ -1,15 +1,15 @@
 @import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&display=swap");
 
 :root {
-  --bg-1: #f3f3f3;
-  --bg-2: #f7f7f7;
-  --ink: #111111;
-  --muted: #5a5a5a;
-  --accent: #0066b8;
-  --panel: #ffffff;
-  --panel-2: #fbfbfb;
-  --border: #d0d0d0;
-  --shadow: 0 8px 22px rgba(20, 24, 28, 0.06);
+  --bg-1: #0f1115;
+  --bg-2: #141821;
+  --ink: #e6e9ef;
+  --muted: #a4acb9;
+  --accent: #7aa2f7;
+  --panel: #171b24;
+  --panel-2: #1b2230;
+  --border: #2a3342;
+  --shadow: 0 10px 26px rgba(0, 0, 0, 0.45);
   --pad: 16px;
   --pad-lg: 20px;
 }
@@ -19,10 +19,6 @@ body,
   font-family: "IBM Plex Sans", sans-serif;
   background: linear-gradient(180deg, var(--bg-1), var(--bg-2));
   color: var(--ink);
-}
-
-.gradio-container {
-  padding: 12px;
 }
 
 h1,
@@ -43,7 +39,7 @@ h3 {
 .app-hero {
   padding: 18px 22px;
   border-radius: 10px;
-  background: var(--panel);
+  background: linear-gradient(135deg, #1b2130, #141821);
   border: 1px solid var(--border);
 }
 
@@ -64,13 +60,13 @@ h3 {
 
 .accent-btn {
   background: var(--accent) !important;
-  color: #fff !important;
+  color: #0b0f18 !important;
   border: none !important;
 }
 
 .secondary-btn {
-  background: #2b3136 !important;
-  color: #fff !important;
+  background: #2a3342 !important;
+  color: #e6e9ef !important;
   border: none !important;
 }
 
@@ -82,6 +78,24 @@ h3 {
 
 .subtle {
   color: var(--muted);
+}
+
+.app-footer {
+  margin-top: 16px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.app-footer a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.app-footer a:hover {
+  text-decoration: underline;
 }
 
 .gradio-container .tabs {
@@ -107,6 +121,18 @@ h3 {
   background: var(--panel-2) !important;
   padding: 12px 14px !important;
   line-height: 1.4;
+  color: var(--ink) !important;
+}
+
+.gradio-container label code,
+.gradio-container .markdown code {
+  background: transparent !important;
+  color: var(--ink) !important;
+}
+
+.gradio-container .markdown pre {
+  background: var(--panel-2) !important;
+  color: var(--ink) !important;
 }
 
 .gradio-container .accordion {
@@ -233,7 +259,7 @@ h3 {
 .gradio-container .tabitem .tab-nav button.selected,
 .gradio-container .tabitem .tab-nav button[aria-selected="true"] {
   background: var(--accent);
-  color: #fff;
+  color: #0b0f18;
   border-color: var(--accent);
 }
 
@@ -241,67 +267,6 @@ h3 {
   background: var(--accent) !important;
   color: #fff !important;
   border-color: var(--accent) !important;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg-1: #1e1e1e;
-    --bg-2: #1b1b1b;
-    --ink: #d4d4d4;
-    --muted: #9da3a6;
-    --accent: #569cd6;
-    --panel: #252526;
-    --panel-2: #2d2d2d;
-    --border: #3a3a3a;
-    --shadow: 0 10px 26px rgba(0, 0, 0, 0.45);
-  }
-
-  body,
-  .gradio-container {
-    background: linear-gradient(180deg, var(--bg-1), var(--bg-2));
-    color: var(--ink);
-  }
-
-  .app-hero {
-    background: var(--panel);
-  }
-
-  .secondary-btn {
-    background: #c8c8c8 !important;
-    color: #1f1f1f !important;
-  }
-
-  .gradio-container input,
-  .gradio-container textarea,
-  .gradio-container select {
-    background: #1f1f1f !important;
-    color: var(--ink) !important;
-    border-color: #3a3a3a !important;
-  }
-
-  .gradio-container .gallery {
-    background: #202020;
-  }
-
-  .pill {
-    background: #2a2a2a;
-    border-color: #3a3a3a;
-    color: var(--muted);
-  }
-
-  .gradio-container .tabs,
-  .gradio-container .accordion,
-  .block,
-  .app-hero {
-    background: var(--panel);
-    border-color: var(--border);
-  }
-
-  .gradio-container .gradio-radio label,
-  .gradio-container .gradio-checkbox label {
-    color: var(--muted);
-  }
-
 }
 
 /* ===== Fix: global padding and Gradio 3.x markdown containers ===== */
@@ -333,4 +298,22 @@ h3 {
   appearance: auto !important;
   -webkit-appearance: auto !important;
   accent-color: var(--accent) !important;
+}
+
+/* ===== Fix: remove label/title background blocks ===== */
+.gradio-container label,
+.gradio-container .label,
+.gradio-container .block-title,
+.gradio-container span[class*="label"],
+.gradio-container [class*="label"] {
+  background: transparent !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+}
+
+.gradio-container .block-title {
+  color: var(--muted) !important;
+  font-size: 0.85rem !important;
+  font-weight: 500 !important;
+  margin-bottom: 6px !important;
 }

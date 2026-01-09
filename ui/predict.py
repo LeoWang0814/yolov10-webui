@@ -34,9 +34,7 @@ def _build_advanced_inputs() -> Tuple[Dict[str, Any], Dict[str, Dict[str, Any]]]
 def build_predict_tab() -> Dict[str, Any]:
     components: Dict[str, Any] = {}
     with gr.Tab("Predict"):
-        gr.Markdown("###   Predict")
         with gr.Group() as basic_group:
-            gr.Markdown("####   Basic Predict")
             model_source = gr.Radio(["Pretrained", "Local .pt"], value="Pretrained", label="Model Source")
             pretrained_model = gr.Dropdown(
                 label="Pretrained Model (Lazy Download)",
@@ -46,26 +44,36 @@ def build_predict_tab() -> Dict[str, Any]:
             )
             local_model = gr.Textbox(
                 label="Local .pt Path",
-                placeholder="weights/yolov10m.pt",
+                placeholder="models/your_model.pt",
                 visible=False,
             )
+            local_upload = gr.File(label="Upload .pt (saved to models/)", file_types=[".pt"], visible=False)
+            upload_status = gr.Textbox(label="Upload Status", interactive=False, visible=False)
             pretrained_hint = gr.Textbox(label="Model Status", interactive=False)
             components.update(
                 {
                     "model_source": model_source,
                     "pretrained_model": pretrained_model,
                     "local_model": local_model,
+                    "local_upload": local_upload,
+                    "upload_status": upload_status,
                     "pretrained_hint": pretrained_hint,
                 }
             )
 
             def _toggle_model_source(kind):
-                return gr.update(visible=kind == "Pretrained"), gr.update(visible=kind == "Local .pt")
+                show_local = kind == "Local .pt"
+                return (
+                    gr.update(visible=kind == "Pretrained"),
+                    gr.update(visible=show_local),
+                    gr.update(visible=show_local),
+                    gr.update(visible=show_local),
+                )
 
             model_source.change(
                 _toggle_model_source,
                 inputs=model_source,
-                outputs=[pretrained_model, local_model],
+                outputs=[pretrained_model, local_model, local_upload, upload_status],
             )
 
             input_type = gr.Radio(["Images", "Video", "Path", "URL"], value="Images", label="Source Type")
@@ -161,7 +169,6 @@ def build_predict_tab() -> Dict[str, Any]:
             components["cli_preview_basic"] = cli_preview_basic
 
         with gr.Group(visible=False) as advanced_group:
-            gr.Markdown("####   Advanced Predict")
             adv_model_source = gr.Radio(["Pretrained", "Local .pt"], value="Pretrained", label="Model Source")
             adv_pretrained_model = gr.Dropdown(
                 label="Pretrained Model (Lazy Download)",
@@ -171,9 +178,11 @@ def build_predict_tab() -> Dict[str, Any]:
             )
             adv_local_model = gr.Textbox(
                 label="Local .pt Path",
-                placeholder="weights/yolov10m.pt",
+                placeholder="models/your_model.pt",
                 visible=False,
             )
+            adv_local_upload = gr.File(label="Upload .pt (saved to models/)", file_types=[".pt"], visible=False)
+            adv_upload_status = gr.Textbox(label="Upload Status", interactive=False, visible=False)
             adv_pretrained_hint = gr.Textbox(label="Model Status", interactive=False)
             adv_input_type = gr.Radio(["Images", "Video", "Path", "URL"], value="Images", label="Source Type")
             adv_images = gr.Files(label="Images (multiple)", file_types=["image"], visible=True)
@@ -185,6 +194,8 @@ def build_predict_tab() -> Dict[str, Any]:
                     "adv_model_source": adv_model_source,
                     "adv_pretrained_model": adv_pretrained_model,
                     "adv_local_model": adv_local_model,
+                    "adv_local_upload": adv_local_upload,
+                    "adv_upload_status": adv_upload_status,
                     "adv_pretrained_hint": adv_pretrained_hint,
                     "adv_input_type": adv_input_type,
                     "adv_images": adv_images,
@@ -195,12 +206,18 @@ def build_predict_tab() -> Dict[str, Any]:
             )
 
             def _toggle_adv_model_source(kind):
-                return gr.update(visible=kind == "Pretrained"), gr.update(visible=kind == "Local .pt")
+                show_local = kind == "Local .pt"
+                return (
+                    gr.update(visible=kind == "Pretrained"),
+                    gr.update(visible=show_local),
+                    gr.update(visible=show_local),
+                    gr.update(visible=show_local),
+                )
 
             adv_model_source.change(
                 _toggle_adv_model_source,
                 inputs=adv_model_source,
-                outputs=[adv_pretrained_model, adv_local_model],
+                outputs=[adv_pretrained_model, adv_local_model, adv_local_upload, adv_upload_status],
             )
 
             def _toggle_adv_source(kind):
