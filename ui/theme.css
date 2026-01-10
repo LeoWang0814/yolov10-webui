@@ -43,19 +43,120 @@ h3 {
   border: 1px solid var(--border);
 }
 
-.status-bar {
+.status-wrap {
   display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  font-size: 13px;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.status-card {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 74px;
+}
+
+.status-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
   color: var(--muted);
 }
 
-.pill {
+.status-value {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+  word-break: break-word;
+}
+
+.status-sub {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.status-platform .status-value {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.status-alert {
+  border: 1px solid rgba(122, 162, 247, 0.5);
+  background: rgba(122, 162, 247, 0.12);
+  color: var(--ink);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.gpu-panel {
   background: var(--panel-2);
   border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 6px 12px;
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.gpu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.gpu-source {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 11px;
+}
+
+.gpu-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.gpu-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: rgba(15, 18, 26, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.gpu-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.gpu-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.gpu-empty {
+  font-size: 13px;
+  color: var(--muted);
+  padding: 6px 2px;
 }
 
 .accent-btn {
