@@ -1,4 +1,3 @@
-import json
 import re
 import shutil
 import sys
@@ -343,6 +342,10 @@ def main() -> gr.Blocks:
         with gr.Tabs():
             train_ui = build_train_tab()
             predict_ui = build_predict_tab()
+        train_pretrained_state = gr.State(value=None)
+        train_adv_pretrained_state = gr.State(value=None)
+        predict_pretrained_state = gr.State(value=None)
+        predict_adv_pretrained_state = gr.State(value=None)
 
         def _sync_mode(mode_value):
             return (
@@ -378,10 +381,6 @@ def main() -> gr.Blocks:
             global MODEL_CHOICES, MODEL_META
             MODEL_CHOICES, MODEL_META = _refresh_model_choices()
             labels = [(label, key) for label, key in MODEL_CHOICES.items()]
-            choices_payload = json.dumps(
-                [{"label": label, "value": key} for label, key in MODEL_CHOICES.items()],
-                ensure_ascii=True,
-            )
 
             def _normalize(value: Optional[str]) -> Optional[str]:
                 key = _model_key_from_choice(value)
@@ -390,16 +389,9 @@ def main() -> gr.Blocks:
             return (
                 gr.update(choices=labels, value=_normalize(train_value)),
                 gr.update(choices=labels, value=_normalize(adv_train_value)),
-                gr.update(value=_normalize(pred_value)),
-                gr.update(value=_normalize(adv_pred_value)),
-                gr.update(value=choices_payload),
-                gr.update(value=choices_payload),
+                gr.update(choices=labels, value=_normalize(pred_value)),
+                gr.update(choices=labels, value=_normalize(adv_pred_value)),
             )
-
-        def _refresh_dropdowns_with_trigger(
-            _trigger, train_value=None, adv_train_value=None, pred_value=None, adv_pred_value=None
-        ):
-            return _refresh_dropdowns(train_value, adv_train_value, pred_value, adv_pred_value)
 
         demo.load(
             _refresh_dropdowns,
@@ -414,45 +406,6 @@ def main() -> gr.Blocks:
                 train_ui["adv_pretrained_model"],
                 predict_ui["pretrained_model"],
                 predict_ui["adv_pretrained_model"],
-                predict_ui["pretrained_choices"],
-                predict_ui["adv_pretrained_choices"],
-            ],
-        )
-
-        predict_ui["pretrained_refresh"].change(
-            _refresh_dropdowns_with_trigger,
-            inputs=[
-                predict_ui["pretrained_refresh"],
-                train_ui["pretrained_model"],
-                train_ui["adv_pretrained_model"],
-                predict_ui["pretrained_model"],
-                predict_ui["adv_pretrained_model"],
-            ],
-            outputs=[
-                train_ui["pretrained_model"],
-                train_ui["adv_pretrained_model"],
-                predict_ui["pretrained_model"],
-                predict_ui["adv_pretrained_model"],
-                predict_ui["pretrained_choices"],
-                predict_ui["adv_pretrained_choices"],
-            ],
-        )
-        predict_ui["adv_pretrained_refresh"].change(
-            _refresh_dropdowns_with_trigger,
-            inputs=[
-                predict_ui["adv_pretrained_refresh"],
-                train_ui["pretrained_model"],
-                train_ui["adv_pretrained_model"],
-                predict_ui["pretrained_model"],
-                predict_ui["adv_pretrained_model"],
-            ],
-            outputs=[
-                train_ui["pretrained_model"],
-                train_ui["adv_pretrained_model"],
-                predict_ui["pretrained_model"],
-                predict_ui["adv_pretrained_model"],
-                predict_ui["pretrained_choices"],
-                predict_ui["adv_pretrained_choices"],
             ],
         )
 
@@ -462,10 +415,23 @@ def main() -> gr.Blocks:
         def _update_predict_hint(source_kind, pretrained_label, local_path):
             return _model_source_hint(source_kind, pretrained_label, local_path)
 
+        def _keep_last_choice(value: Optional[str], last_value: Optional[str]):
+            normalized = _model_key_from_choice(value)
+            if normalized:
+                return gr.update(value=normalized), normalized
+            if last_value:
+                return gr.update(value=last_value), last_value
+            return gr.update(value=value), last_value
+
         train_ui["model_source"].change(
             _update_train_hint,
             inputs=[train_ui["model_source"], train_ui["pretrained_model"], train_ui["local_model"]],
             outputs=train_ui["pretrained_hint"],
+        )
+        train_ui["pretrained_model"].change(
+            _keep_last_choice,
+            inputs=[train_ui["pretrained_model"], train_pretrained_state],
+            outputs=[train_ui["pretrained_model"], train_pretrained_state],
         )
         train_ui["pretrained_model"].change(
             _update_train_hint,
@@ -482,6 +448,11 @@ def main() -> gr.Blocks:
             _update_train_hint,
             inputs=[train_ui["adv_model_source"], train_ui["adv_pretrained_model"], train_ui["adv_local_model"]],
             outputs=train_ui["adv_pretrained_hint"],
+        )
+        train_ui["adv_pretrained_model"].change(
+            _keep_last_choice,
+            inputs=[train_ui["adv_pretrained_model"], train_adv_pretrained_state],
+            outputs=[train_ui["adv_pretrained_model"], train_adv_pretrained_state],
         )
         train_ui["adv_pretrained_model"].change(
             _update_train_hint,
@@ -520,6 +491,11 @@ def main() -> gr.Blocks:
             outputs=predict_ui["pretrained_hint"],
         )
         predict_ui["pretrained_model"].change(
+            _keep_last_choice,
+            inputs=[predict_ui["pretrained_model"], predict_pretrained_state],
+            outputs=[predict_ui["pretrained_model"], predict_pretrained_state],
+        )
+        predict_ui["pretrained_model"].change(
             _update_predict_hint,
             inputs=[predict_ui["model_source"], predict_ui["pretrained_model"], predict_ui["local_model"]],
             outputs=predict_ui["pretrained_hint"],
@@ -534,6 +510,11 @@ def main() -> gr.Blocks:
             _update_predict_hint,
             inputs=[predict_ui["adv_model_source"], predict_ui["adv_pretrained_model"], predict_ui["adv_local_model"]],
             outputs=predict_ui["adv_pretrained_hint"],
+        )
+        predict_ui["adv_pretrained_model"].change(
+            _keep_last_choice,
+            inputs=[predict_ui["adv_pretrained_model"], predict_adv_pretrained_state],
+            outputs=[predict_ui["adv_pretrained_model"], predict_adv_pretrained_state],
         )
         predict_ui["adv_pretrained_model"].change(
             _update_predict_hint,
