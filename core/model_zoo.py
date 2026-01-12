@@ -68,39 +68,14 @@ def _env_int(name: str, default: int, min_value: int = 1, max_value: int = 32) -
     return max(min_value, min(max_value, value))
 
 
-def _mirror_url(url: str, mirror: str) -> str:
-    if not mirror:
-        return url
-    if mirror.endswith("/"):
-        return mirror + url
-    return mirror + "/" + url
-
-
 def _source_urls(zoo: Dict, meta: Dict) -> List[str]:
     sources = meta.get("sources", {})
     if not sources:
         return []
-    preferred = os.getenv("YOLOV10_DOWNLOAD_SOURCE") or os.getenv("YOLOV10_MODEL_SOURCE")
-    default_source = zoo.get("default_source")
-    urls: List[str] = []
-
-    if preferred and preferred in sources:
-        urls.append(sources[preferred])
-    elif default_source in sources:
-        urls.append(sources[default_source])
-    else:
-        urls.append(next(iter(sources.values())))
-
-    for url in sources.values():
-        if url not in urls:
-            urls.append(url)
-
-    mirror = os.getenv("YOLOV10_DOWNLOAD_MIRROR")
-    if mirror:
-        mirrored = [_mirror_url(url, mirror) for url in urls]
-        urls = mirrored + urls
-
-    return urls
+    github_url = sources.get("github")
+    if not github_url:
+        return []
+    return [github_url]
 
 
 def _probe_download(session: requests.Session, url: str) -> Tuple[int, bool]:

@@ -2,6 +2,7 @@ import json
 import queue
 import subprocess
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -113,14 +114,25 @@ def start_process(cmd: List[str]) -> subprocess.Popen:
     return _process
 
 
-def stream_logs(process: subprocess.Popen) -> Iterable[str]:
+def stream_logs(
+    process: subprocess.Popen,
+    heartbeat: Optional[float] = None,
+    heartbeat_message: Optional[str] = None,
+) -> Iterable[str]:
+    last_heartbeat = time.time()
     while process.poll() is None or not _log_queue.empty():
         if _stop_event.is_set():
             break
         try:
             line = _log_queue.get(timeout=0.2)
             yield line
+            last_heartbeat = time.time()
         except queue.Empty:
+            if heartbeat:
+                now = time.time()
+                if now - last_heartbeat >= heartbeat:
+                    yield heartbeat_message or "[status] Running, waiting for output..."
+                    last_heartbeat = now
             continue
 
 

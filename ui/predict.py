@@ -31,17 +31,193 @@ def _build_advanced_inputs() -> Tuple[Dict[str, Any], Dict[str, Dict[str, Any]]]
     return flat_components, grouped_components
 
 
+def _model_selector_html(widget_id: str, label: str, placeholder: str) -> str:
+    return f"""
+<div class="model-select" id="{widget_id}">
+  <label class="model-select-label">{label}</label>
+  <div class="model-select-input-wrap">
+    <input class="model-select-input" type="text" placeholder="{placeholder}" autocomplete="off" />
+    <span class="model-select-chevron">v</span>
+  </div>
+  <div class="model-select-list" data-open="0"></div>
+</div>
+<script>
+(function() {{
+  const root = document.getElementById("{widget_id}");
+  if (!root || root.dataset.bound === "1") return;
+  root.dataset.bound = "1";
+  const input = root.querySelector(".model-select-input");
+  const list = root.querySelector(".model-select-list");
+  const valueEl = document.getElementById("{widget_id}-value");
+  const choicesEl = document.getElementById("{widget_id}-choices");
+  const refreshEl = document.getElementById("{widget_id}-refresh");
+  let lastChoicesRaw = null;
+  let choices = [];
+
+  function readChoices() {{
+    const raw = choicesEl ? choicesEl.value : "[]";
+    if (raw === lastChoicesRaw) return;
+    lastChoicesRaw = raw;
+    try {{
+      choices = JSON.parse(raw) || [];
+    }} catch (e) {{
+      choices = [];
+    }}
+    syncFromValue();
+    if (list.dataset.open === "1") {{
+      renderList(input.value, true);
+    }}
+  }}
+
+  function syncFromValue() {{
+    if (!valueEl || !input) return;
+    const match = choices.find((c) => c.value === valueEl.value);
+    if (match) {{
+      input.value = match.label;
+    }}
+  }}
+
+  function openList() {{
+    list.style.display = "block";
+    list.dataset.open = "1";
+  }}
+
+  function closeList() {{
+    list.style.display = "none";
+    list.dataset.open = "0";
+  }}
+
+  function selectItem(item) {{
+    if (!item) return;
+    input.value = item.label;
+    if (valueEl) {{
+      valueEl.value = item.value;
+      valueEl.dispatchEvent(new Event("input", {{ bubbles: true }}));
+      valueEl.dispatchEvent(new Event("change", {{ bubbles: true }}));
+    }}
+    closeList();
+  }}
+
+  function renderList(query, skipRead) {{
+    if (!skipRead) {{
+      readChoices();
+    }}
+    const q = (query || "").trim().toLowerCase();
+    const filtered = q
+      ? choices.filter(
+          (c) =>
+            String(c.label || "").toLowerCase().includes(q) ||
+            String(c.value || "").toLowerCase().includes(q)
+        )
+      : choices.slice();
+
+    list.innerHTML = "";
+    let activeIndex = -1;
+    if (filtered.length) {{
+      if (q) {{
+        activeIndex = 0;
+      }} else if (valueEl && valueEl.value) {{
+        activeIndex = filtered.findIndex((c) => c.value === valueEl.value);
+      }}
+      if (activeIndex < 0) activeIndex = 0;
+    }}
+
+    filtered.forEach((item, idx) => {{
+      const row = document.createElement("div");
+      row.className = "model-select-item";
+      if (idx === activeIndex) row.classList.add("active");
+      row.textContent = item.label;
+      row.addEventListener("click", () => selectItem(item));
+      list.appendChild(row);
+    }});
+
+    const needsViewAll = q || !filtered.length;
+    if (needsViewAll) {{
+      const divider = document.createElement("div");
+      divider.className = "model-select-divider";
+      list.appendChild(divider);
+      const viewAll = document.createElement("div");
+      viewAll.className = "model-select-item view-all";
+      viewAll.textContent = "View all...";
+      viewAll.addEventListener("click", () => {{
+        input.value = "";
+        renderList("");
+        openList();
+      }});
+      list.appendChild(viewAll);
+    }}
+
+    if (!filtered.length) {{
+      const empty = document.createElement("div");
+      empty.className = "model-select-empty";
+      empty.textContent = "No matches";
+      list.insertBefore(empty, list.firstChild);
+    }}
+  }}
+
+  input.addEventListener("focus", () => {{
+    renderList("");
+    openList();
+    if (refreshEl) {{
+      refreshEl.value = String(Date.now());
+      refreshEl.dispatchEvent(new Event("input", {{ bubbles: true }}));
+      refreshEl.dispatchEvent(new Event("change", {{ bubbles: true }}));
+    }}
+  }});
+
+  input.addEventListener("input", () => {{
+    renderList(input.value);
+    openList();
+  }});
+
+  input.addEventListener("keydown", (ev) => {{
+    if (ev.key === "Enter") {{
+      const q = (input.value || "").trim().toLowerCase();
+      readChoices();
+      const filtered = q
+        ? choices.filter(
+            (c) =>
+              String(c.label || "").toLowerCase().includes(q) ||
+              String(c.value || "").toLowerCase().includes(q)
+          )
+        : choices.slice();
+      if (filtered.length) {{
+        selectItem(filtered[0]);
+      }}
+      ev.preventDefault();
+    }}
+    if (ev.key === "Escape") {{
+      closeList();
+    }}
+  }});
+
+  document.addEventListener("click", (ev) => {{
+    if (!root.contains(ev.target)) {{
+      closeList();
+    }}
+  }});
+
+  setInterval(readChoices, 800);
+}})();
+</script>
+"""
+
+
 def build_predict_tab() -> Dict[str, Any]:
     components: Dict[str, Any] = {}
     with gr.Tab("Predict"):
         with gr.Group() as basic_group:
             model_source = gr.Radio(["Pretrained", "Local .pt"], value="Pretrained", label="Model Source")
-            pretrained_model = gr.Dropdown(
-                label="Pretrained Model (Lazy Download)",
-                choices=[],
-                value=None,
-                visible=True,
+            pretrained_selector = gr.HTML(
+                _model_selector_html(
+                    "predict-pretrained",
+                    "Pretrained Model (Lazy Download)",
+                    "Type to filter models...",
+                )
             )
+            pretrained_model = gr.Textbox(visible=False, elem_id="predict-pretrained-value")
+            pretrained_choices = gr.Textbox(value="[]", visible=False, elem_id="predict-pretrained-choices")
+            pretrained_refresh = gr.Textbox(value="", visible=False, elem_id="predict-pretrained-refresh")
             local_model = gr.Textbox(
                 label="Local .pt Path",
                 placeholder="models/your_model.pt",
@@ -54,6 +230,9 @@ def build_predict_tab() -> Dict[str, Any]:
                 {
                     "model_source": model_source,
                     "pretrained_model": pretrained_model,
+                    "pretrained_choices": pretrained_choices,
+                    "pretrained_refresh": pretrained_refresh,
+                    "pretrained_selector": pretrained_selector,
                     "local_model": local_model,
                     "local_upload": local_upload,
                     "upload_status": upload_status,
@@ -73,7 +252,7 @@ def build_predict_tab() -> Dict[str, Any]:
             model_source.change(
                 _toggle_model_source,
                 inputs=model_source,
-                outputs=[pretrained_model, local_model, local_upload, upload_status],
+                outputs=[pretrained_selector, local_model, local_upload, upload_status],
             )
 
             input_type = gr.Radio(["Images", "Video", "Path", "URL"], value="Images", label="Source Type")
@@ -145,9 +324,6 @@ def build_predict_tab() -> Dict[str, Any]:
 
             device_mode.change(_toggle_devices, inputs=device_mode, outputs=[single_gpu, multi_gpu])
 
-            save = gr.Checkbox(label="Save Outputs", value=True)
-            components["save"] = save
-
             start_btn = gr.Button("Run Predict", elem_classes=["accent-btn"])
             stop_btn = gr.Button("Stop", elem_classes=["secondary-btn"])
             log_box = gr.Textbox(label="Predict Logs", lines=14)
@@ -170,12 +346,16 @@ def build_predict_tab() -> Dict[str, Any]:
 
         with gr.Group(visible=False) as advanced_group:
             adv_model_source = gr.Radio(["Pretrained", "Local .pt"], value="Pretrained", label="Model Source")
-            adv_pretrained_model = gr.Dropdown(
-                label="Pretrained Model (Lazy Download)",
-                choices=[],
-                value=None,
-                visible=True,
+            adv_pretrained_selector = gr.HTML(
+                _model_selector_html(
+                    "predict-adv-pretrained",
+                    "Pretrained Model (Lazy Download)",
+                    "Type to filter models...",
+                )
             )
+            adv_pretrained_model = gr.Textbox(visible=False, elem_id="predict-adv-pretrained-value")
+            adv_pretrained_choices = gr.Textbox(value="[]", visible=False, elem_id="predict-adv-pretrained-choices")
+            adv_pretrained_refresh = gr.Textbox(value="", visible=False, elem_id="predict-adv-pretrained-refresh")
             adv_local_model = gr.Textbox(
                 label="Local .pt Path",
                 placeholder="models/your_model.pt",
@@ -193,6 +373,9 @@ def build_predict_tab() -> Dict[str, Any]:
                 {
                     "adv_model_source": adv_model_source,
                     "adv_pretrained_model": adv_pretrained_model,
+                    "adv_pretrained_choices": adv_pretrained_choices,
+                    "adv_pretrained_refresh": adv_pretrained_refresh,
+                    "adv_pretrained_selector": adv_pretrained_selector,
                     "adv_local_model": adv_local_model,
                     "adv_local_upload": adv_local_upload,
                     "adv_upload_status": adv_upload_status,
@@ -217,7 +400,7 @@ def build_predict_tab() -> Dict[str, Any]:
             adv_model_source.change(
                 _toggle_adv_model_source,
                 inputs=adv_model_source,
-                outputs=[adv_pretrained_model, adv_local_model, adv_local_upload, adv_upload_status],
+                outputs=[adv_pretrained_selector, adv_local_model, adv_local_upload, adv_upload_status],
             )
 
             def _toggle_adv_source(kind):

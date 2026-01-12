@@ -1,6 +1,9 @@
+import json
 import re
 import shutil
 import sys
+import threading
+import time
 import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -32,10 +35,16 @@ def _refresh_model_choices() -> Tuple[Dict[str, str], Dict[str, Dict]]:
 MODEL_CHOICES, MODEL_META = _refresh_model_choices()
 
 
-def _model_path_from_choice(choice_label: str) -> Optional[Path]:
-    if not choice_label:
+def _model_key_from_choice(choice_value: Optional[str]) -> Optional[str]:
+    if not choice_value:
         return None
-    model_key = MODEL_CHOICES.get(choice_label)
+    if choice_value in MODEL_META:
+        return choice_value
+    return MODEL_CHOICES.get(choice_value)
+
+
+def _model_path_from_choice(choice_label: str) -> Optional[Path]:
+    model_key = _model_key_from_choice(choice_label)
     if not model_key:
         return None
     meta = MODEL_META.get(model_key)
@@ -47,7 +56,7 @@ def _model_path_from_choice(choice_label: str) -> Optional[Path]:
 def _model_hint(choice_label: Optional[str]) -> str:
     if not choice_label:
         return "Select a pretrained model to see download status."
-    model_key = MODEL_CHOICES.get(choice_label)
+    model_key = _model_key_from_choice(choice_label)
     if not model_key:
         return "Unknown model selection."
     meta = MODEL_META.get(model_key, {})
@@ -82,7 +91,7 @@ def _resolve_model_path(
     if source_kind == "Pretrained":
         if not pretrained_label:
             raise ValueError("Please select a pretrained model.")
-        model_key = MODEL_CHOICES.get(pretrained_label)
+        model_key = _model_key_from_choice(pretrained_label)
         if not model_key:
             raise ValueError("Invalid pretrained model selection.")
         if allow_download:
@@ -166,11 +175,11 @@ def _collect_outputs(run_dir: Path) -> Tuple[List[str], Optional[str]]:
     images = []
     video = None
     for suffix in ("*.jpg", "*.png", "*.jpeg", "*.bmp"):
-        images.extend([str(p) for p in run_dir.rglob(suffix)])
+        images.extend([str(p.resolve()) for p in run_dir.rglob(suffix)])
     for suffix in ("*.mp4", "*.avi", "*.mov", "*.mkv", "*.webm"):
-        candidates = list(run_dir.rglob(suffix))
+        candidates = sorted(run_dir.rglob(suffix), key=lambda p: p.stat().st_mtime, reverse=True)
         if candidates:
-            video = str(candidates[0])
+            video = str(candidates[0].resolve())
             break
     return images, video
 
@@ -235,6 +244,74 @@ def _strip_ansi(text: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
 
+def _append_log(log: str, message: str) -> str:
+    if log and not log.endswith("\n"):
+        log += "\n"
+    return f"{log}{message}\n"
+
+
+class _ProgressTracker:
+    def __init__(self, gr_progress, min_interval: float = 0.8):
+        self.gr_progress = gr_progress
+        self.min_interval = min_interval
+        self.last_desc = None
+        self.last_emitted = None
+        self.last_emit = 0.0
+        self.pending = None
+        self.lock = threading.Lock()
+
+    def __call__(self, pct: float, desc: str = "") -> None:
+        if self.gr_progress is not None:
+            self.gr_progress(pct, desc=desc)
+        if not desc:
+            return
+        now = time.time()
+        with self.lock:
+            self.last_desc = desc
+            if desc != self.last_emitted and now - self.last_emit >= self.min_interval:
+                self.pending = desc
+
+    def consume(self) -> Optional[str]:
+        with self.lock:
+            if not self.pending:
+                return None
+            msg = self.pending
+            self.pending = None
+            self.last_emitted = msg
+            self.last_emit = time.time()
+            return msg
+
+    def flush(self) -> Optional[str]:
+        with self.lock:
+            if self.last_desc and self.last_desc != self.last_emitted:
+                self.last_emitted = self.last_desc
+                self.last_emit = time.time()
+                return self.last_desc
+            return None
+
+
+def _format_size_mb(num_bytes: int) -> str:
+    return f"{num_bytes / (1024 ** 2):.2f} MB"
+
+
+def _format_speed_mb(num_bytes: int, seconds: float) -> str:
+    if seconds <= 0:
+        return "unknown"
+    return f"{num_bytes / (1024 ** 2) / seconds:.2f} MB/s"
+
+
+def _model_cache_state(pretrained_label: Optional[str]) -> Tuple[Optional[Path], bool, Optional[float]]:
+    expected = _model_path_from_choice(pretrained_label or "")
+    if expected is None:
+        return None, False, None
+    if not expected.exists():
+        return expected, False, None
+    try:
+        return expected, True, expected.stat().st_mtime
+    except OSError:
+        return expected, True, None
+
+
 def _extract_results_dir(log_text: str) -> Optional[Path]:
     for line in reversed(log_text.splitlines()):
         if "Results saved to" in line:
@@ -297,25 +374,85 @@ def main() -> gr.Blocks:
             outputs=train_ui["data_status"],
         )
 
-        def _refresh_dropdowns():
+        def _refresh_dropdowns(train_value=None, adv_train_value=None, pred_value=None, adv_pred_value=None):
             global MODEL_CHOICES, MODEL_META
             MODEL_CHOICES, MODEL_META = _refresh_model_choices()
-            labels = list(MODEL_CHOICES.keys())
-            return (
-                gr.update(choices=labels),
-                gr.update(choices=labels),
-                gr.update(choices=labels),
-                gr.update(choices=labels),
+            labels = [(label, key) for label, key in MODEL_CHOICES.items()]
+            choices_payload = json.dumps(
+                [{"label": label, "value": key} for label, key in MODEL_CHOICES.items()],
+                ensure_ascii=True,
             )
+
+            def _normalize(value: Optional[str]) -> Optional[str]:
+                key = _model_key_from_choice(value)
+                return key if key in MODEL_META else None
+
+            return (
+                gr.update(choices=labels, value=_normalize(train_value)),
+                gr.update(choices=labels, value=_normalize(adv_train_value)),
+                gr.update(value=_normalize(pred_value)),
+                gr.update(value=_normalize(adv_pred_value)),
+                gr.update(value=choices_payload),
+                gr.update(value=choices_payload),
+            )
+
+        def _refresh_dropdowns_with_trigger(
+            _trigger, train_value=None, adv_train_value=None, pred_value=None, adv_pred_value=None
+        ):
+            return _refresh_dropdowns(train_value, adv_train_value, pred_value, adv_pred_value)
 
         demo.load(
             _refresh_dropdowns,
-            inputs=None,
+            inputs=[
+                train_ui["pretrained_model"],
+                train_ui["adv_pretrained_model"],
+                predict_ui["pretrained_model"],
+                predict_ui["adv_pretrained_model"],
+            ],
             outputs=[
                 train_ui["pretrained_model"],
                 train_ui["adv_pretrained_model"],
                 predict_ui["pretrained_model"],
                 predict_ui["adv_pretrained_model"],
+                predict_ui["pretrained_choices"],
+                predict_ui["adv_pretrained_choices"],
+            ],
+        )
+
+        predict_ui["pretrained_refresh"].change(
+            _refresh_dropdowns_with_trigger,
+            inputs=[
+                predict_ui["pretrained_refresh"],
+                train_ui["pretrained_model"],
+                train_ui["adv_pretrained_model"],
+                predict_ui["pretrained_model"],
+                predict_ui["adv_pretrained_model"],
+            ],
+            outputs=[
+                train_ui["pretrained_model"],
+                train_ui["adv_pretrained_model"],
+                predict_ui["pretrained_model"],
+                predict_ui["adv_pretrained_model"],
+                predict_ui["pretrained_choices"],
+                predict_ui["adv_pretrained_choices"],
+            ],
+        )
+        predict_ui["adv_pretrained_refresh"].change(
+            _refresh_dropdowns_with_trigger,
+            inputs=[
+                predict_ui["adv_pretrained_refresh"],
+                train_ui["pretrained_model"],
+                train_ui["adv_pretrained_model"],
+                predict_ui["pretrained_model"],
+                predict_ui["adv_pretrained_model"],
+            ],
+            outputs=[
+                train_ui["pretrained_model"],
+                train_ui["adv_pretrained_model"],
+                predict_ui["pretrained_model"],
+                predict_ui["adv_pretrained_model"],
+                predict_ui["pretrained_choices"],
+                predict_ui["adv_pretrained_choices"],
             ],
         )
 
@@ -481,20 +618,93 @@ def main() -> gr.Blocks:
         def _run_basic_train(*inputs, progress=gr.Progress()):
             log = ""
             try:
+                log = _append_log(log, "[status] Resolving model...")
+                yield log, "", "", ""
                 args = _basic_train_args(*inputs, create_run_dir=True)
-                model_path = _resolve_model_path(
-                    inputs[1],
-                    inputs[2],
-                    inputs[3],
-                    progress=progress,
-                    allow_download=True,
-                )
+                expected_path, existed, mtime_before = (None, False, None)
+                if inputs[1] == "Pretrained":
+                    expected_path, existed, mtime_before = _model_cache_state(inputs[2])
+                if expected_path:
+                    if existed:
+                        log = _append_log(log, "[status] Found cached model file, verifying checksum...")
+                    else:
+                        log = _append_log(log, "[status] Downloading model from GitHub release...")
+                    yield log, "", "", ""
+                start_time = time.time()
+                if inputs[1] == "Pretrained":
+                    tracker = _ProgressTracker(progress)
+                    result: Dict[str, Path] = {}
+                    error: Dict[str, Exception] = {}
+
+                    def worker():
+                        try:
+                            result["path"] = _resolve_model_path(
+                                inputs[1],
+                                inputs[2],
+                                inputs[3],
+                                progress=tracker,
+                                allow_download=True,
+                            )
+                        except Exception as exc:
+                            error["exc"] = exc
+
+                    thread = threading.Thread(target=worker, daemon=True)
+                    thread.start()
+                    while thread.is_alive():
+                        msg = tracker.consume()
+                        if msg:
+                            log = _append_log(log, f"[download] {msg}")
+                            yield log, "", "", ""
+                        time.sleep(0.2)
+                    thread.join()
+                    msg = tracker.flush()
+                    if msg:
+                        log = _append_log(log, f"[download] {msg}")
+                        yield log, "", "", ""
+                    if error.get("exc"):
+                        raise error["exc"]
+                    model_path = result["path"]
+                else:
+                    model_path = _resolve_model_path(
+                        inputs[1],
+                        inputs[2],
+                        inputs[3],
+                        progress=progress,
+                        allow_download=True,
+                    )
+                elapsed = time.time() - start_time
+                if expected_path and not existed:
+                    size_bytes = model_path.stat().st_size if model_path.exists() else 0
+                    speed = _format_speed_mb(size_bytes, elapsed)
+                    log = _append_log(
+                        log,
+                        f"[status] Download complete: {_format_size_mb(size_bytes)} in {elapsed:.1f}s ({speed}).",
+                    )
+                    yield log, "", "", ""
+                elif expected_path and existed:
+                    mtime_after = model_path.stat().st_mtime if model_path.exists() else None
+                    if mtime_before and mtime_after and mtime_after > mtime_before:
+                        size_bytes = model_path.stat().st_size if model_path.exists() else 0
+                        speed = _format_speed_mb(size_bytes, elapsed)
+                        log = _append_log(
+                            log,
+                            f"[status] Model updated after checksum check: {_format_size_mb(size_bytes)} in {elapsed:.1f}s ({speed}).",
+                        )
+                    else:
+                        log = _append_log(log, "[status] Model cached, skip download.")
+                    yield log, "", "", ""
                 args["model"] = str(model_path)
                 run_dir = Path(args["project"]) / args["name"]
                 cmd, preview = build_command("detect", "train", args)
                 write_run_metadata(run_dir, args, preview)
+                log = _append_log(log, "[status] Launching process...")
+                yield log, str(run_dir), "", ""
                 process = start_process(cmd)
-                for line in stream_logs(process):
+                for line in stream_logs(
+                    process,
+                    heartbeat=5.0,
+                    heartbeat_message="[status] Training running, waiting for output...",
+                ):
                     clean_line = _strip_ansi(line)
                     log += clean_line
                     yield log, str(run_dir), "", ""
@@ -612,14 +822,81 @@ def main() -> gr.Blocks:
         ):
             log = ""
             try:
+                log = _append_log(log, "[status] Resolving model...")
+                yield log, "", "", ""
                 values = _gather_adv_values(train_ui["adv_flat"], list(adv_values))
-                model_path = _resolve_model_path(
-                    adv_model_source,
-                    adv_pretrained_model,
-                    adv_local_model,
-                    progress=progress,
-                    allow_download=True,
-                )
+                expected_path, existed, mtime_before = (None, False, None)
+                if adv_model_source == "Pretrained":
+                    expected_path, existed, mtime_before = _model_cache_state(adv_pretrained_model)
+                if expected_path:
+                    if existed:
+                        log = _append_log(log, "[status] Found cached model file, verifying checksum...")
+                    else:
+                        log = _append_log(log, "[status] Downloading model from GitHub release...")
+                    yield log, "", "", ""
+                start_time = time.time()
+                if adv_model_source == "Pretrained":
+                    tracker = _ProgressTracker(progress)
+                    result: Dict[str, Path] = {}
+                    error: Dict[str, Exception] = {}
+
+                    def worker():
+                        try:
+                            result["path"] = _resolve_model_path(
+                                adv_model_source,
+                                adv_pretrained_model,
+                                adv_local_model,
+                                progress=tracker,
+                                allow_download=True,
+                            )
+                        except Exception as exc:
+                            error["exc"] = exc
+
+                    thread = threading.Thread(target=worker, daemon=True)
+                    thread.start()
+                    while thread.is_alive():
+                        msg = tracker.consume()
+                        if msg:
+                            log = _append_log(log, f"[download] {msg}")
+                            yield log, "", "", ""
+                        time.sleep(0.2)
+                    thread.join()
+                    msg = tracker.flush()
+                    if msg:
+                        log = _append_log(log, f"[download] {msg}")
+                        yield log, "", "", ""
+                    if error.get("exc"):
+                        raise error["exc"]
+                    model_path = result["path"]
+                else:
+                    model_path = _resolve_model_path(
+                        adv_model_source,
+                        adv_pretrained_model,
+                        adv_local_model,
+                        progress=progress,
+                        allow_download=True,
+                    )
+                elapsed = time.time() - start_time
+                if expected_path and not existed:
+                    size_bytes = model_path.stat().st_size if model_path.exists() else 0
+                    speed = _format_speed_mb(size_bytes, elapsed)
+                    log = _append_log(
+                        log,
+                        f"[status] Download complete: {_format_size_mb(size_bytes)} in {elapsed:.1f}s ({speed}).",
+                    )
+                    yield log, "", "", ""
+                elif expected_path and existed:
+                    mtime_after = model_path.stat().st_mtime if model_path.exists() else None
+                    if mtime_before and mtime_after and mtime_after > mtime_before:
+                        size_bytes = model_path.stat().st_size if model_path.exists() else 0
+                        speed = _format_speed_mb(size_bytes, elapsed)
+                        log = _append_log(
+                            log,
+                            f"[status] Model updated after checksum check: {_format_size_mb(size_bytes)} in {elapsed:.1f}s ({speed}).",
+                        )
+                    else:
+                        log = _append_log(log, "[status] Model cached, skip download.")
+                    yield log, "", "", ""
                 values["model"] = str(model_path)
                 if adv_data_path:
                     values["data"] = adv_data_path
@@ -628,8 +905,14 @@ def main() -> gr.Blocks:
                 values["name"] = run_dir.name
                 cmd, preview = build_command("detect", "train", values)
                 write_run_metadata(run_dir, values, preview)
+                log = _append_log(log, "[status] Launching process...")
+                yield log, str(run_dir), "", ""
                 process = start_process(cmd)
-                for line in stream_logs(process):
+                for line in stream_logs(
+                    process,
+                    heartbeat=5.0,
+                    heartbeat_message="[status] Training running, waiting for output...",
+                ):
                     clean_line = _strip_ansi(line)
                     log += clean_line
                     yield log, str(run_dir), "", ""
@@ -672,7 +955,6 @@ def main() -> gr.Blocks:
             device_mode,
             single_gpu,
             multi_gpu,
-            save,
         ) -> Dict:
             model_path = _resolve_model_path(model_source, pretrained_model, local_model, allow_download=False)
             device = _device_value(device_mode, single_gpu, multi_gpu)
@@ -682,7 +964,7 @@ def main() -> gr.Blocks:
                 "iou": iou,
                 "imgsz": int(imgsz),
                 "device": device,
-                "save": bool(save),
+                "save": True,
             }
             return args
 
@@ -701,7 +983,6 @@ def main() -> gr.Blocks:
             predict_ui["device_mode"],
             predict_ui["single_gpu"],
             predict_ui["multi_gpu"],
-            predict_ui["save"],
         ]
 
         def _update_basic_predict_cli(*inputs):
@@ -722,25 +1003,103 @@ def main() -> gr.Blocks:
         def _run_basic_predict(*inputs, progress=gr.Progress()):
             log = ""
             try:
+                log = _append_log(log, "[status] Resolving model...")
+                yield log, [], None, ""
                 args = _basic_predict_args(*inputs)
-                model_path = _resolve_model_path(
-                    inputs[0],
-                    inputs[1],
-                    inputs[2],
-                    progress=progress,
-                    allow_download=True,
-                )
+                expected_path, existed, mtime_before = (None, False, None)
+                if inputs[0] == "Pretrained":
+                    expected_path, existed, mtime_before = _model_cache_state(inputs[1])
+                if expected_path:
+                    if existed:
+                        log = _append_log(log, "[status] Found cached model file, verifying checksum...")
+                    else:
+                        log = _append_log(log, "[status] Downloading model from GitHub release...")
+                    yield log, [], None, ""
+                start_time = time.time()
+                if inputs[0] == "Pretrained":
+                    tracker = _ProgressTracker(progress)
+                    result: Dict[str, Path] = {}
+                    error: Dict[str, Exception] = {}
+
+                    def worker():
+                        try:
+                            result["path"] = _resolve_model_path(
+                                inputs[0],
+                                inputs[1],
+                                inputs[2],
+                                progress=tracker,
+                                allow_download=True,
+                            )
+                        except Exception as exc:
+                            error["exc"] = exc
+
+                    thread = threading.Thread(target=worker, daemon=True)
+                    thread.start()
+                    while thread.is_alive():
+                        msg = tracker.consume()
+                        if msg:
+                            log = _append_log(log, f"[download] {msg}")
+                            yield log, [], None, ""
+                        time.sleep(0.2)
+                    thread.join()
+                    msg = tracker.flush()
+                    if msg:
+                        log = _append_log(log, f"[download] {msg}")
+                        yield log, [], None, ""
+                    if error.get("exc"):
+                        raise error["exc"]
+                    model_path = result["path"]
+                else:
+                    model_path = _resolve_model_path(
+                        inputs[0],
+                        inputs[1],
+                        inputs[2],
+                        progress=progress,
+                        allow_download=True,
+                    )
+                elapsed = time.time() - start_time
+                if expected_path and not existed:
+                    size_bytes = model_path.stat().st_size if model_path.exists() else 0
+                    speed = _format_speed_mb(size_bytes, elapsed)
+                    log = _append_log(
+                        log,
+                        f"[status] Download complete: {_format_size_mb(size_bytes)} in {elapsed:.1f}s ({speed}).",
+                    )
+                    yield log, [], None, ""
+                elif expected_path and existed:
+                    mtime_after = model_path.stat().st_mtime if model_path.exists() else None
+                    if mtime_before and mtime_after and mtime_after > mtime_before:
+                        size_bytes = model_path.stat().st_size if model_path.exists() else 0
+                        speed = _format_speed_mb(size_bytes, elapsed)
+                        log = _append_log(
+                            log,
+                            f"[status] Model updated after checksum check: {_format_size_mb(size_bytes)} in {elapsed:.1f}s ({speed}).",
+                        )
+                    else:
+                        log = _append_log(log, "[status] Model cached, skip download.")
+                    yield log, [], None, ""
                 args["model"] = str(model_path)
+                log = _append_log(log, f"[status] Using model: {model_path}")
                 run_dir = _run_dir_path("predict", None, create=True)
+                yield log, [], None, str(run_dir)
+                log = _append_log(log, "[status] Preparing source...")
                 source = _prepare_source(inputs[3], inputs[4], inputs[5], inputs[6], inputs[7], run_dir, preview=False)
                 args["source"] = source
                 args["project"] = str(run_dir.parent)
                 args["name"] = run_dir.name
                 cmd, preview = build_command("detect", "predict", args)
                 write_run_metadata(run_dir, args, preview)
+                log = _append_log(log, "[status] Launching process...")
+                yield log, [], None, str(run_dir)
                 process = start_process(cmd)
-                for line in stream_logs(process):
+                for line in stream_logs(
+                    process,
+                    heartbeat=5.0,
+                    heartbeat_message="[status] Model running, waiting for output...",
+                ):
                     clean_line = _strip_ansi(line)
+                    if not clean_line.endswith("\n"):
+                        clean_line += "\n"
                     log += clean_line
                     yield log, [], None, str(run_dir)
                 parsed_dir = _extract_results_dir(log)
@@ -792,6 +1151,7 @@ def main() -> gr.Blocks:
             values["source"] = source
             values["project"] = str(run_dir.parent)
             values["name"] = run_dir.name
+            values["save"] = True
             return values
 
         adv_predict_components = list(predict_ui["adv_flat"].values())
@@ -832,16 +1192,86 @@ def main() -> gr.Blocks:
         def _run_adv_predict(adv_model_source, adv_pretrained_model, adv_local_model, adv_input_type, adv_images, adv_video, adv_source_path, adv_source_url, *adv_values, progress=gr.Progress()):
             log = ""
             try:
+                log = _append_log(log, "[status] Resolving model...")
+                yield log, [], None, ""
                 values = _gather_adv_values(predict_ui["adv_flat"], list(adv_values))
-                model_path = _resolve_model_path(
-                    adv_model_source,
-                    adv_pretrained_model,
-                    adv_local_model,
-                    progress=progress,
-                    allow_download=True,
-                )
+                expected_path, existed, mtime_before = (None, False, None)
+                if adv_model_source == "Pretrained":
+                    expected_path, existed, mtime_before = _model_cache_state(adv_pretrained_model)
+                if expected_path:
+                    if existed:
+                        log = _append_log(log, "[status] Found cached model file, verifying checksum...")
+                    else:
+                        log = _append_log(log, "[status] Downloading model from GitHub release...")
+                    yield log, [], None, ""
+                start_time = time.time()
+                if adv_model_source == "Pretrained":
+                    tracker = _ProgressTracker(progress)
+                    result: Dict[str, Path] = {}
+                    error: Dict[str, Exception] = {}
+
+                    def worker():
+                        try:
+                            result["path"] = _resolve_model_path(
+                                adv_model_source,
+                                adv_pretrained_model,
+                                adv_local_model,
+                                progress=tracker,
+                                allow_download=True,
+                            )
+                        except Exception as exc:
+                            error["exc"] = exc
+
+                    thread = threading.Thread(target=worker, daemon=True)
+                    thread.start()
+                    while thread.is_alive():
+                        msg = tracker.consume()
+                        if msg:
+                            log = _append_log(log, f"[download] {msg}")
+                            yield log, [], None, ""
+                        time.sleep(0.2)
+                    thread.join()
+                    msg = tracker.flush()
+                    if msg:
+                        log = _append_log(log, f"[download] {msg}")
+                        yield log, [], None, ""
+                    if error.get("exc"):
+                        raise error["exc"]
+                    model_path = result["path"]
+                else:
+                    model_path = _resolve_model_path(
+                        adv_model_source,
+                        adv_pretrained_model,
+                        adv_local_model,
+                        progress=progress,
+                        allow_download=True,
+                    )
+                elapsed = time.time() - start_time
+                if expected_path and not existed:
+                    size_bytes = model_path.stat().st_size if model_path.exists() else 0
+                    speed = _format_speed_mb(size_bytes, elapsed)
+                    log = _append_log(
+                        log,
+                        f"[status] Download complete: {_format_size_mb(size_bytes)} in {elapsed:.1f}s ({speed}).",
+                    )
+                    yield log, [], None, ""
+                elif expected_path and existed:
+                    mtime_after = model_path.stat().st_mtime if model_path.exists() else None
+                    if mtime_before and mtime_after and mtime_after > mtime_before:
+                        size_bytes = model_path.stat().st_size if model_path.exists() else 0
+                        speed = _format_speed_mb(size_bytes, elapsed)
+                        log = _append_log(
+                            log,
+                            f"[status] Model updated after checksum check: {_format_size_mb(size_bytes)} in {elapsed:.1f}s ({speed}).",
+                        )
+                    else:
+                        log = _append_log(log, "[status] Model cached, skip download.")
+                    yield log, [], None, ""
                 values["model"] = str(model_path)
+                log = _append_log(log, f"[status] Using model: {model_path}")
                 run_dir = _run_dir_path("predict", None, create=True)
+                yield log, [], None, str(run_dir)
+                log = _append_log(log, "[status] Preparing source...")
                 source = _prepare_source(
                     adv_input_type,
                     adv_images,
@@ -856,9 +1286,17 @@ def main() -> gr.Blocks:
                 values["name"] = run_dir.name
                 cmd, preview = build_command("detect", "predict", values)
                 write_run_metadata(run_dir, values, preview)
+                log = _append_log(log, "[status] Launching process...")
+                yield log, [], None, str(run_dir)
                 process = start_process(cmd)
-                for line in stream_logs(process):
+                for line in stream_logs(
+                    process,
+                    heartbeat=5.0,
+                    heartbeat_message="[status] Model running, waiting for output...",
+                ):
                     clean_line = _strip_ansi(line)
+                    if not clean_line.endswith("\n"):
+                        clean_line += "\n"
                     log += clean_line
                     yield log, [], None, str(run_dir)
                 parsed_dir = _extract_results_dir(log)
