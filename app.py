@@ -1,5 +1,6 @@
 import re
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -8,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import gradio as gr
+import cv2
 
 from core.args_schema import coerce_dict, default_cfg_dict
 from core.model_zoo import ensure_model, is_model_cached, model_choices
@@ -170,6 +172,81 @@ def _prepare_source(
     raise ValueError("Invalid source type.")
 
 
+def _ffmpeg_path() -> Optional[str]:
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg:
+        return ffmpeg
+    try:
+        import imageio_ffmpeg  # type: ignore
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
+
+
+def _ensure_web_video(path: Path) -> Optional[Path]:
+    target = path.with_name(path.stem + "_web.mp4")
+    try:
+        if target.exists() and target.stat().st_mtime >= path.stat().st_mtime:
+            return target
+        ffmpeg = _ffmpeg_path()
+        if ffmpeg:
+            result = subprocess.run(
+                [
+                    ffmpeg,
+                    "-y",
+                    "-i",
+                    str(path),
+                    "-movflags",
+                    "+faststart",
+                    "-vf",
+                    "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-c:v",
+                    "libx264",
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "128k",
+                    str(target),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0 and target.exists():
+                return target
+        if path.suffix.lower() in (".mp4", ".webm"):
+            return path
+        cap = cv2.VideoCapture(str(path))
+        if not cap.isOpened():
+            return path
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if not fps or fps <= 0:
+            fps = 25.0
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 0
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 0
+        if width <= 0 or height <= 0:
+            cap.release()
+            return path
+        writer = cv2.VideoWriter(
+            str(target),
+            cv2.VideoWriter_fourcc(*"mp4v"),
+            fps,
+            (width, height),
+        )
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            writer.write(frame)
+        cap.release()
+        writer.release()
+        return target if target.exists() else path
+    except Exception:
+        return path
+
+
 def _collect_outputs(run_dir: Path) -> Tuple[List[str], Optional[str]]:
     images = []
     video = None
@@ -178,7 +255,9 @@ def _collect_outputs(run_dir: Path) -> Tuple[List[str], Optional[str]]:
     for suffix in ("*.mp4", "*.avi", "*.mov", "*.mkv", "*.webm"):
         candidates = sorted(run_dir.rglob(suffix), key=lambda p: p.stat().st_mtime, reverse=True)
         if candidates:
-            video = str(candidates[0].resolve())
+            candidate = candidates[0].resolve()
+            web_video = _ensure_web_video(candidate)
+            video = str(web_video.resolve()) if web_video else str(candidate)
             break
     return images, video
 

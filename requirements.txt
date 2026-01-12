@@ -45,3 +45,4 @@ tqdm==4.67.1
 psutil==5.9.8
 rich==14.1.0
 filelock==3.18.0
+imageio-ffmpeg==0.5.1

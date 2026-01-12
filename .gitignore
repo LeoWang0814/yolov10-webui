@@ -140,6 +140,7 @@ dmypy.json
 
 # datasets and projects
 datasets/
+example-dataset/
 runs/
 wandb/
 tests/
