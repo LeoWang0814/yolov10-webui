@@ -96,6 +96,15 @@ python app.py
 # Please visit http://127.0.0.1:7860
 ```
 
+## Download acceleration
+If GitHub Releases is slow, you can enable faster or alternate downloads with env vars:
+```
+# PowerShell example: use a mirror prefix (set your preferred mirror)
+$env:YOLOV10_DOWNLOAD_MIRROR="https://ghproxy.com/"
+# Optional: increase parallel download workers (default 4, max 8)
+$env:YOLOV10_DOWNLOAD_WORKERS="4"
+```
+
 ## Validation
 [`yolov10n`](https://huggingface.co/jameslahm/yolov10n)  [`yolov10s`](https://huggingface.co/jameslahm/yolov10s)  [`yolov10m`](https://huggingface.co/jameslahm/yolov10m)  [`yolov10b`](https://huggingface.co/jameslahm/yolov10b)  [`yolov10l`](https://huggingface.co/jameslahm/yolov10l)  [`yolov10x`](https://huggingface.co/jameslahm/yolov10x)  
 ```
