@@ -1,4 +1,6 @@
+import codecs
 import json
+import os
 import queue
 import subprocess
 import threading
@@ -18,10 +20,31 @@ _stop_event = threading.Event()
 
 
 def _reader_thread(process: subprocess.Popen) -> None:
-    for line in iter(process.stdout.readline, ""):
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    buffer = ""
+    while True:
         if _stop_event.is_set():
             break
-        _log_queue.put(line)
+        chunk = process.stdout.read(1)
+        if not chunk:
+            break
+        buffer += decoder.decode(chunk)
+        while True:
+            idx_n = buffer.find("\n")
+            idx_r = buffer.find("\r")
+            indices = [i for i in (idx_n, idx_r) if i != -1]
+            if not indices:
+                break
+            idx = min(indices)
+            line = buffer[: idx + 1]
+            buffer = buffer[idx + 1 :]
+            _log_queue.put(line)
+        if len(buffer) > 8192:
+            _log_queue.put(buffer)
+            buffer = ""
+    buffer += decoder.decode(b"", final=True)
+    if buffer:
+        _log_queue.put(buffer)
     process.stdout.close()
 
 
@@ -100,14 +123,16 @@ def start_process(cmd: List[str]) -> subprocess.Popen:
             _log_queue.get_nowait()
         except queue.Empty:
             break
+    env = os.environ.copy()
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("PYTHONUTF8", "1")
     _process = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-        encoding="utf-8",
-        errors="replace",
+        bufsize=0,
+        env=env,
     )
     thread = threading.Thread(target=_reader_thread, args=(_process,), daemon=True)
     thread.start()
@@ -120,17 +145,28 @@ def stream_logs(
     heartbeat_message: Optional[str] = None,
 ) -> Iterable[str]:
     last_heartbeat = time.time()
+    last_debug = last_heartbeat
+    line_count = 0
     while process.poll() is None or not _log_queue.empty():
         if _stop_event.is_set():
             break
         try:
             line = _log_queue.get(timeout=0.2)
+            line_count += 1
+            if line_count == 1:
+                print("[log-debug] first stdout line received", flush=True)
             yield line
             last_heartbeat = time.time()
         except queue.Empty:
             if heartbeat:
                 now = time.time()
                 if now - last_heartbeat >= heartbeat:
+                    if now - last_debug >= heartbeat * 2:
+                        print(
+                            f"[log-debug] heartbeat no-stdout poll={process.poll()} qsize={_log_queue.qsize()}",
+                            flush=True,
+                        )
+                        last_debug = now
                     yield heartbeat_message or "[status] Running, waiting for output..."
                     last_heartbeat = now
             continue

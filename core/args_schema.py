@@ -136,7 +136,9 @@ PREDICT_GROUPS = {
 
 
 def default_cfg_dict() -> Dict[str, Any]:
-    return dict(DEFAULT_CFG_DICT)
+    cfg = dict(DEFAULT_CFG_DICT)
+    cfg["amp"] = False
+    return cfg
 
 
 def build_grouped_defaults(mode: str) -> Dict[str, Dict[str, Any]]:

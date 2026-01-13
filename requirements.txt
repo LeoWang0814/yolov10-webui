@@ -46,3 +46,4 @@ psutil==5.9.8
 rich==14.1.0
 filelock==3.18.0
 imageio-ffmpeg==0.5.1
+plotly==5.22.0

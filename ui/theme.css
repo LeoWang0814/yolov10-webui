@@ -475,6 +475,119 @@ h3 {
   word-break: break-word;
 }
 
+.metrics-empty {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 8px 4px;
+}
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.metrics-panel .plotly-graph-div {
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  padding: 8px;
+}
+
+.metrics-panel .tabitem {
+  background: transparent;
+}
+
+.metrics-panel .tabitem .tab-content {
+  padding-top: 8px;
+}
+
+.metrics-panel .dataframe {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.metrics-panel .dataframe table {
+  border-collapse: collapse;
+  scroll-behavior: auto;
+  overflow-anchor: none;
+}
+
+.metrics-panel .dataframe table th,
+.metrics-panel .dataframe table td {
+  background: transparent !important;
+}
+
+.metrics-panel .dataframe table tbody tr,
+.metrics-panel .dataframe table tbody tr:nth-child(even),
+.metrics-panel .dataframe table tbody tr:nth-child(odd) {
+  background: transparent !important;
+  transition: none !important;
+}
+
+.metrics-panel .dataframe table tbody tr:hover {
+  background: rgba(122, 162, 247, 0.08) !important;
+}
+
+.metrics-panel .dataframe * {
+  animation: none !important;
+}
+
+.metrics-panel .block {
+  background: transparent;
+  box-shadow: none;
+}
+
+.metrics-panel .gr-button.secondary-btn {
+  background: rgba(42, 51, 66, 0.8) !important;
+}
+
+/* metrics-tick button is intentionally visible */
+
+.kpi-card {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 72px;
+}
+
+.kpi-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.kpi-value {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.kpi-trend {
+  font-size: 12px;
+  color: rgba(122, 162, 247, 0.7);
+}
+
+.diag-note {
+  margin: 8px 0 2px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(122, 162, 247, 0.35);
+  background: rgba(122, 162, 247, 0.08);
+  color: var(--ink);
+  font-size: 12px;
+}
+
 .predict-status-empty {
   color: var(--muted);
   font-size: 12px;

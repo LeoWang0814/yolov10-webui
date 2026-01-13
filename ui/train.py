@@ -38,7 +38,7 @@ def build_train_tab() -> Dict[str, Any]:
             with gr.Row():
                 data_path = gr.Textbox(label="Dataset YAML Path (data)", placeholder="datasets/coco8.yaml")
                 validate_btn = gr.Button("Validate Data")
-                data_status = gr.Textbox(label="Data Status", interactive=False)
+                data_status = gr.HTML(label="Data Status")
             components.update(
                 {
                     "data_path": data_path,
@@ -147,6 +147,30 @@ def build_train_tab() -> Dict[str, Any]:
                 run_name = gr.Textbox(label="Run Name (optional)", placeholder="exp-001")
                 output_dir = gr.Textbox(label="Output Directory", interactive=False)
             components.update({"run_name": run_name, "output_dir": output_dir})
+            with gr.Group(visible=False) as basic_conflict_group:
+                basic_conflict_message = gr.Markdown("")
+                basic_conflict_action = gr.Radio(
+                    ["Rename run", "Cancel"],
+                    value="Rename run",
+                    label="Directory exists",
+                )
+                basic_conflict_name = gr.Textbox(
+                    label="New Run Name",
+                    placeholder="exp-001-new",
+                )
+                with gr.Row():
+                    basic_conflict_confirm = gr.Button("Confirm", elem_classes=["accent-btn"])
+                    basic_conflict_cancel = gr.Button("Close", elem_classes=["secondary-btn"])
+            components.update(
+                {
+                    "basic_conflict_group": basic_conflict_group,
+                    "basic_conflict_message": basic_conflict_message,
+                    "basic_conflict_action": basic_conflict_action,
+                    "basic_conflict_name": basic_conflict_name,
+                    "basic_conflict_confirm": basic_conflict_confirm,
+                    "basic_conflict_cancel": basic_conflict_cancel,
+                }
+            )
 
             with gr.Row():
                 start_btn = gr.Button("Start Training", elem_classes=["accent-btn"])
@@ -197,6 +221,30 @@ def build_train_tab() -> Dict[str, Any]:
                     "adv_upload_status": adv_upload_status,
                     "adv_pretrained_hint": adv_pretrained_hint,
                     "adv_run_name": adv_run_name,
+                }
+            )
+            with gr.Group(visible=False) as adv_conflict_group:
+                adv_conflict_message = gr.Markdown("")
+                adv_conflict_action = gr.Radio(
+                    ["Rename run", "Cancel"],
+                    value="Rename run",
+                    label="Directory exists",
+                )
+                adv_conflict_name = gr.Textbox(
+                    label="New Run Name",
+                    placeholder="exp-adv-001-new",
+                )
+                with gr.Row():
+                    adv_conflict_confirm = gr.Button("Confirm", elem_classes=["accent-btn"])
+                    adv_conflict_cancel = gr.Button("Close", elem_classes=["secondary-btn"])
+            components.update(
+                {
+                    "adv_conflict_group": adv_conflict_group,
+                    "adv_conflict_message": adv_conflict_message,
+                    "adv_conflict_action": adv_conflict_action,
+                    "adv_conflict_name": adv_conflict_name,
+                    "adv_conflict_confirm": adv_conflict_confirm,
+                    "adv_conflict_cancel": adv_conflict_cancel,
                 }
             )
 
@@ -252,5 +300,71 @@ def build_train_tab() -> Dict[str, Any]:
 
         components["basic_group"] = basic_group
         components["advanced_group"] = advanced_group
+
+        with gr.Group(elem_classes=["metrics-panel"]):
+            gr.Markdown("### Logs / Metrics")
+            with gr.Row():
+                smooth_toggle = gr.Checkbox(label="Smoothing", value=True)
+                view_range = gr.Number(label="View Range (rows, -1=all)", value=-1, precision=0)
+            metrics_tick = gr.Button(value="Click to refresh charts", visible=True, elem_id="metrics-tick")
+            gr.HTML(
+                """
+                <script>
+                (function() {
+                  if (window.__metricsTickStarted) return;
+                  window.__metricsTickStarted = true;
+                  var findBtn = function() {
+                    var host = document.getElementById('metrics-tick');
+                    if (!host) return null;
+                    if (host.tagName === 'BUTTON') return host;
+                    return host.querySelector('button');
+                  };
+                  var tick = function() {
+                    var btn = findBtn();
+                    if (btn) { btn.click(); }
+                  };
+                  var start = function() {
+                    tick();
+                    setInterval(tick, 1000);
+                  };
+                  if (document.readyState === 'loading') {
+                    document.addEventListener('DOMContentLoaded', start);
+                  } else {
+                    start();
+                  }
+                })();
+                </script>
+                """
+            )
+            kpi_html = gr.HTML(value="<div class='metrics-empty'>No run selected.</div>")
+            diag_html = gr.HTML(value="")
+            with gr.Tabs():
+                with gr.Tab("Loss"):
+                    loss_plot = gr.Plot()
+                with gr.Tab("Metrics"):
+                    metric_plot = gr.Plot()
+                with gr.Tab("LR"):
+                    lr_plot = gr.Plot()
+            with gr.Row():
+                table_filter = gr.Textbox(label="Search (rows/cols)", placeholder="search rows or cols=loss,map")
+                export_btn = gr.Button("Export CSV", elem_classes=["secondary-btn"])
+                export_file = gr.File(label="Download CSV", interactive=False)
+            metrics_table = gr.Dataframe(label="Logs", interactive=False, wrap=True)
+            components.update(
+                {
+                    "smooth_toggle": smooth_toggle,
+                    "view_range": view_range,
+                    "metrics_tick": metrics_tick,
+                    "kpi_html": kpi_html,
+                    "diag_html": diag_html,
+                    "loss_plot": loss_plot,
+                    "metric_plot": metric_plot,
+                    "lr_plot": lr_plot,
+                    "table_filter": table_filter,
+                    "export_btn": export_btn,
+                    "export_file": export_file,
+                    "metrics_table": metrics_table,
+                }
+            )
 
     return components

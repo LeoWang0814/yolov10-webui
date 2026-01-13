@@ -1,4 +1,8 @@
+import csv
 import html
+import io
+import inspect
+import os
 import re
 import shutil
 import subprocess
@@ -11,6 +15,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import gradio as gr
 import cv2
+import pandas as pd
+import plotly.graph_objects as go
+import yaml
 
 from core.args_schema import coerce_dict, default_cfg_dict
 from core.model_zoo import ensure_model, is_model_cached, model_choices
@@ -21,8 +28,10 @@ from ui.train import build_train_tab
 
 
 ROOT = Path(__file__).resolve().parent
+LAST_TRAIN_RUN_DIR: Optional[str] = None
+LAST_RESULTS_CSV: Optional[str] = None
 DEFAULT_CFG = default_cfg_dict()
-MAX_LOG_LINES = 400
+MAX_LOG_LINES = 2000
 
 
 def _load_css() -> str:
@@ -266,9 +275,7 @@ def _collect_outputs(run_dir: Path) -> Tuple[List[str], Optional[str]]:
 
 def _resolve_actual_run_dir(run_dir: Path) -> Path:
     if run_dir.exists():
-        has_files = any(run_dir.rglob("*"))
-        if has_files:
-            return run_dir
+        return run_dir
     parent = run_dir.parent
     if not parent.exists():
         return run_dir
@@ -288,6 +295,7 @@ def _update_cli_preview(task: str, mode: str, args: Dict) -> str:
 
 
 def _run_dir_path(mode: str, name: Optional[str], create: bool) -> Path:
+    name = (name or "").strip()
     if name:
         run_dir = Path("runs") / mode / name
     else:
@@ -295,6 +303,22 @@ def _run_dir_path(mode: str, name: Optional[str], create: bool) -> Path:
     if create:
         run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir
+
+
+def _resolve_local_path(raw: str) -> Path:
+    path = Path(raw)
+    if not path.is_absolute():
+        path = (ROOT / path).resolve()
+    return path
+
+
+def _run_dir_has_content(run_dir: Path) -> bool:
+    if not run_dir.exists():
+        return False
+    try:
+        return any(run_dir.rglob("*"))
+    except OSError:
+        return False
 
 
 def _log_exception(context: str, exc: Exception) -> None:
@@ -324,6 +348,10 @@ def _strip_ansi(text: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
 
+def _normalize_csv_key(value: str) -> str:
+    return re.sub(r"\s+", "", value or "")
+
+
 def _trim_log(log: str, max_lines: int = MAX_LOG_LINES) -> str:
     lines = log.splitlines()
     if len(lines) <= max_lines:
@@ -339,13 +367,79 @@ def _append_log(log: str, message: str, max_lines: int = MAX_LOG_LINES) -> str:
     return _trim_log(log, max_lines=max_lines)
 
 
+def _append_log_raw(log: str, text: str, max_lines: int = MAX_LOG_LINES) -> str:
+    if not text:
+        return log
+    tokens = re.split(r"(\r|\n)", text)
+    lines = log.splitlines()
+    if not lines:
+        lines = [""]
+    if log.endswith("\n"):
+        lines.append("")
+    line_buf = lines[-1]
+    overwrite_pending = False
+    for token in tokens:
+        if not token:
+            continue
+        if token == "\r":
+            lines[-1] = line_buf
+            line_buf = ""
+            overwrite_pending = True
+            continue
+        if token == "\n":
+            lines[-1] = line_buf
+            lines.append("")
+            line_buf = ""
+            overwrite_pending = False
+            continue
+        if overwrite_pending:
+            line_buf = token
+            overwrite_pending = False
+        else:
+            line_buf += token
+    if not (overwrite_pending and not line_buf):
+        lines[-1] = line_buf
+    log = "\n".join(lines)
+    if log and not log.endswith("\n"):
+        log += "\n"
+    return _trim_log(log, max_lines=max_lines)
+
+
 def _append_log_lines(log: str, text: str, max_lines: int = MAX_LOG_LINES) -> str:
     if not text:
         return log
+    tokens = re.split(r"(\r|\n)", text)
+    lines = log.splitlines()
+    if not lines:
+        lines = [""]
+    if log.endswith("\n"):
+        lines.append("")
+    line_buf = lines[-1]
+    overwrite_pending = False
+    for token in tokens:
+        if not token:
+            continue
+        if token == "\r":
+            lines[-1] = line_buf
+            line_buf = ""
+            overwrite_pending = True
+            continue
+        if token == "\n":
+            lines[-1] = line_buf
+            lines.append("")
+            line_buf = ""
+            overwrite_pending = False
+            continue
+        if overwrite_pending:
+            line_buf = token
+            overwrite_pending = False
+        else:
+            line_buf += token
+    if not (overwrite_pending and not line_buf):
+        lines[-1] = line_buf
+    log = "\n".join(lines)
     if log and not log.endswith("\n"):
         log += "\n"
-    chunk = text.rstrip("\n")
-    log = f"{log}{chunk}\n"
     return _trim_log(log, max_lines=max_lines)
 
 
@@ -419,8 +513,53 @@ def _extract_results_dir(log_text: str) -> Optional[Path]:
             cleaned = line.split("Results saved to", 1)[-1].strip()
             cleaned = cleaned.strip().strip(".")
             if cleaned:
-                return Path(cleaned)
+                return _resolve_local_path(cleaned)
     return None
+
+
+def _extract_save_dir(log_text: str) -> Optional[Path]:
+    if not log_text:
+        return None
+    match = re.search(r"save_dir=([^\s]+)", log_text)
+    if match:
+        return _resolve_local_path(match.group(1))
+    return _extract_results_dir(log_text)
+
+
+def _find_results_csv(base_dir: Path) -> Optional[Path]:
+    if base_dir.exists():
+        direct = base_dir / "results.csv"
+        if direct.exists():
+            return direct
+        candidates = list(base_dir.rglob("results.csv"))
+        if candidates:
+            return max(candidates, key=lambda p: p.stat().st_mtime)
+    parent = base_dir.parent
+    if parent.exists():
+        candidates = []
+        for candidate in parent.glob(f"{base_dir.name}*"):
+            csv_path = candidate / "results.csv"
+            if csv_path.exists():
+                candidates.append(csv_path)
+        if candidates:
+            return max(candidates, key=lambda p: p.stat().st_mtime)
+    return None
+
+
+def _tail_results_line(csv_path: Path, last_line: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    if not csv_path.exists():
+        return last_line, None
+    try:
+        with csv_path.open("r", encoding="utf-8", errors="replace") as f:
+            rows = [line.strip() for line in f if line.strip()]
+        if len(rows) < 2:
+            return last_line, None
+        tail = rows[-1]
+        if tail == last_line:
+            return last_line, None
+        return tail, tail
+    except Exception:
+        return last_line, None
 
 
 def _predict_status_snapshot(log: str) -> Tuple[str, str]:
@@ -469,6 +608,394 @@ def _render_predict_status(log: str) -> str:
     """
 
 
+def _render_data_status(path: str) -> str:
+    if not path:
+        return "<div class='metrics-empty'>Missing data path.</div>"
+    data_path = Path(path)
+    if not data_path.exists():
+        return "<div class='metrics-empty'>File not found.</div>"
+    try:
+        data = yaml.safe_load(data_path.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        return f"<div class='metrics-empty'>Invalid YAML: {html.escape(str(exc))}</div>"
+
+    root = Path(data.get("path", data_path.parent))
+    if not root.is_absolute():
+        root = (data_path.parent / root).resolve()
+
+    def _resolve_split(value) -> List[Path]:
+        if not value:
+            return []
+        if isinstance(value, (list, tuple)):
+            items = value
+        else:
+            items = [value]
+        paths = []
+        for item in items:
+            p = Path(item)
+            if not p.is_absolute():
+                p = (root / p).resolve()
+            paths.append(p)
+        return paths
+
+    def _count_images(folder: Path) -> Optional[int]:
+        if not folder.exists():
+            return None
+        if folder.is_file():
+            return 1
+        exts = (".jpg", ".jpeg", ".png", ".bmp")
+        return sum(1 for p in folder.rglob("*") if p.suffix.lower() in exts)
+
+    splits = {
+        "Train": _resolve_split(data.get("train")),
+        "Val": _resolve_split(data.get("val")),
+        "Test": _resolve_split(data.get("test")),
+    }
+
+    cards = []
+    for name, paths in splits.items():
+        if not paths:
+            continue
+        for p in paths:
+            count = _count_images(p)
+            count_text = f"{count} images" if count is not None else "missing"
+            status = "Ready" if count else "Missing"
+            cards.append(
+                f"""
+                <div class="status-card">
+                  <div class="status-label">{html.escape(name)}</div>
+                  <div class="status-value">{html.escape(str(p))}</div>
+                  <div class="status-sub">{html.escape(count_text)} · {status}</div>
+                </div>
+                """
+            )
+
+    if not cards:
+        return "<div class='metrics-empty'>No dataset splits found in YAML.</div>"
+
+    return f"<div class='metrics-grid'>{''.join(cards)}</div>"
+
+
+def _list_train_runs() -> List[str]:
+    root = Path("runs") / "train"
+    if not root.exists():
+        return []
+    runs = [str(p) for p in root.iterdir() if p.is_dir()]
+    return sorted(runs, key=lambda p: Path(p).stat().st_mtime, reverse=True)
+
+
+def _init_results_state() -> Dict[str, Any]:
+    return {"path": None, "offset": 0, "header": None, "rows": []}
+
+
+def _read_results_incremental(state: Dict[str, Any], csv_path: Path) -> Tuple[Dict[str, Any], pd.DataFrame]:
+    if not csv_path.exists():
+        return state, pd.DataFrame()
+    path = str(csv_path.resolve())
+    if state.get("path") != path:
+        state = _init_results_state()
+        state["path"] = path
+
+    try:
+        file_size = csv_path.stat().st_size
+    except OSError:
+        return state, pd.DataFrame(state.get("rows", []))
+
+    if file_size < state.get("offset", 0):
+        state = _init_results_state()
+        state["path"] = path
+
+    with csv_path.open("r", encoding="utf-8", errors="replace", newline="") as f:
+        if not state.get("header"):
+            header_line = f.readline()
+            if not header_line:
+                return state, pd.DataFrame(state.get("rows", []))
+            header_raw = next(csv.reader([header_line.strip()]), [])
+            if header_raw:
+                header_raw[0] = header_raw[0].lstrip("\ufeff")
+            state["header"] = [_normalize_csv_key(h) for h in header_raw]
+            state["offset"] = f.tell()
+        f.seek(state.get("offset", 0))
+        new_text = f.read()
+        state["offset"] = f.tell()
+
+    if new_text:
+        reader = csv.DictReader(io.StringIO(new_text), fieldnames=state.get("header") or [])
+        rows = state.get("rows", [])
+        for row in reader:
+            cleaned = {_normalize_csv_key(str(k)): (v.strip() if isinstance(v, str) else v) for k, v in row.items()}
+            if not any(cleaned.values()):
+                continue
+            rows.append(cleaned)
+        state["rows"] = rows[-5000:]
+    elif not state.get("rows") and file_size > 0:
+        try:
+            df_full = pd.read_csv(csv_path, encoding="utf-8", engine="python", skipinitialspace=True)
+            df_full.rename(columns=lambda c: _normalize_csv_key(str(c)), inplace=True)
+            state["header"] = [_normalize_csv_key(str(c)) for c in df_full.columns]
+            state["rows"] = df_full.tail(5000).to_dict(orient="records")
+            state["offset"] = file_size
+        except Exception:
+            return state, pd.DataFrame(state.get("rows", []))
+
+    df = pd.DataFrame(state.get("rows", []))
+    if not df.empty:
+        for col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    return state, df
+
+
+def _find_col(df: pd.DataFrame, base: str) -> Optional[str]:
+    if base in df.columns:
+        return base
+    if base.endswith("(B)"):
+        alt = base.replace("(B)", "")
+        return alt if alt in df.columns else None
+    alt = f"{base}(B)"
+    return alt if alt in df.columns else None
+
+
+def _apply_view(df: pd.DataFrame, view_range: Optional[float]) -> pd.DataFrame:
+    if df.empty:
+        return df
+    if view_range is None:
+        return df
+    try:
+        count = int(view_range)
+    except (TypeError, ValueError):
+        return df
+    if count < 0:
+        return df
+    if count == 0:
+        return df.head(0)
+    return df.tail(count)
+
+
+def _apply_smoothing(df: pd.DataFrame, cols: List[str], window: int, enabled: bool) -> pd.DataFrame:
+    if not enabled or window <= 1:
+        return df
+    smoothed = df.copy()
+    for col in cols:
+        if col in smoothed.columns:
+            smoothed[col] = smoothed[col].rolling(window, min_periods=1).mean()
+    return smoothed
+
+
+def _plot_series(df: pd.DataFrame, x_col: str, series: List[Tuple[str, str]]) -> go.Figure:
+    fig = go.Figure()
+    x = df[x_col] if x_col in df.columns else pd.Series(range(len(df)))
+    x = pd.to_numeric(x, errors="coerce")
+    has_trace = False
+    alphas = [0.9, 0.7, 0.55, 0.4]
+
+    for idx, (col, label) in enumerate(series):
+        if col not in df.columns:
+            continue
+        y = pd.to_numeric(df[col], errors="coerce")
+        if y.notna().sum() == 0:
+            continue
+        alpha = alphas[min(idx, len(alphas) - 1)]
+        color = f"rgba(122,162,247,{alpha})"
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=y,
+                mode="lines",
+                name=label,
+                line=dict(color=color, width=2, shape="spline", smoothing=0.6),
+                hovertemplate="epoch=%{x}<br>%{y:.4f}<extra></extra>",
+            )
+        )
+        has_trace = True
+
+    if not has_trace:
+        fig.add_annotation(
+            text="No data yet",
+            xref="paper",
+            yref="paper",
+            x=0.5,
+            y=0.5,
+            showarrow=False,
+            font=dict(color="#a4acb9"),
+        )
+
+    fig.update_layout(
+        paper_bgcolor="#171b24",
+        plot_bgcolor="#171b24",
+        font=dict(color="#e6e9ef"),
+        margin=dict(l=32, r=20, t=32, b=28),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0, font=dict(size=11)),
+        hovermode="x unified",
+        xaxis=dict(
+            title="epoch",
+            showgrid=True,
+            gridcolor="rgba(42,51,66,0.28)",
+            zeroline=False,
+            tickfont=dict(color="#a4acb9"),
+        ),
+        yaxis=dict(
+            showgrid=True,
+            gridcolor="rgba(42,51,66,0.28)",
+            zeroline=False,
+            tickfont=dict(color="#a4acb9"),
+        ),
+    )
+    return fig
+
+
+def _empty_plot(message: str) -> go.Figure:
+    fig = go.Figure()
+    fig.add_annotation(
+        text=message,
+        xref="paper",
+        yref="paper",
+        x=0.5,
+        y=0.5,
+        showarrow=False,
+        font=dict(color="#a4acb9"),
+    )
+    fig.update_layout(
+        paper_bgcolor="#171b24",
+        plot_bgcolor="#171b24",
+        font=dict(color="#e6e9ef"),
+        margin=dict(l=32, r=20, t=32, b=28),
+        xaxis=dict(visible=False),
+        yaxis=dict(visible=False),
+    )
+    return fig
+
+
+def _render_kpis(df: pd.DataFrame) -> str:
+    if df.empty:
+        return "<div class='metrics-empty'>No results yet.</div>"
+
+    def _value(col_name: str) -> Optional[float]:
+        col = _find_col(df, col_name)
+        if col and col in df.columns:
+            value = pd.to_numeric(df[col].iloc[-1], errors="coerce")
+            return float(value) if pd.notna(value) else None
+        return None
+
+    def _best(col_name: str) -> Optional[float]:
+        col = _find_col(df, col_name)
+        if col and col in df.columns:
+            value = pd.to_numeric(df[col], errors="coerce").max()
+            return float(value) if pd.notna(value) else None
+        return None
+
+    def _trend(col_name: str) -> str:
+        col = _find_col(df, col_name)
+        if not col or col not in df.columns or len(df) < 2:
+            return ""
+        prev = pd.to_numeric(df[col].iloc[-2], errors="coerce")
+        cur = pd.to_numeric(df[col].iloc[-1], errors="coerce")
+        if pd.isna(prev) or pd.isna(cur):
+            return ""
+        arrow = "^" if cur >= prev else "v"
+        return f"<span class='kpi-trend'>{arrow}</span>"
+
+    epoch = _value("epoch")
+    time_elapsed = _value("time")
+    map5095 = _value("metrics/mAP50-95(B)")
+    map50 = _value("metrics/mAP50(B)")
+    precision = _value("metrics/precision(B)")
+    recall = _value("metrics/recall(B)")
+    lr_pg0 = _value("lr/pg0")
+    val_loss = None
+    val_candidates = [
+        "val/box_loss",
+        "val/cls_loss",
+        "val/dfl_loss",
+        "val/box_om",
+        "val/cls_om",
+        "val/dfl_om",
+        "val/box_oo",
+        "val/cls_oo",
+        "val/dfl_oo",
+    ]
+    for col in val_candidates:
+        col_name = _find_col(df, col) or (col if col in df.columns else None)
+        if col_name:
+            val_loss = (val_loss or 0.0) + float(_value(col_name) or 0.0)
+
+    def _card(label: str, value: str, trend: str = "") -> str:
+        return f"""
+        <div class="kpi-card">
+          <div class="kpi-label">{html.escape(label)}</div>
+          <div class="kpi-value">{value}{trend}</div>
+        </div>
+        """
+
+    cards = []
+    if epoch is not None:
+        cards.append(_card("Epoch", f"{int(epoch)}"))
+    if time_elapsed is not None:
+        cards.append(_card("Elapsed", f"{time_elapsed:.1f}"))
+    if map5095 is not None:
+        best = _best("metrics/mAP50-95(B)")
+        suffix = f" / {best:.3f}" if best is not None else ""
+        cards.append(_card("mAP50-95", f"{map5095:.3f}{suffix}", _trend("metrics/mAP50-95(B)")))
+    if map50 is not None:
+        cards.append(_card("mAP50", f"{map50:.3f}", _trend("metrics/mAP50(B)")))
+    if precision is not None:
+        cards.append(_card("Precision", f"{precision:.3f}", _trend("metrics/precision(B)")))
+    if recall is not None:
+        cards.append(_card("Recall", f"{recall:.3f}", _trend("metrics/recall(B)")))
+    if lr_pg0 is not None:
+        cards.append(_card("LR (pg0)", f"{lr_pg0:.6f}"))
+    if val_loss is not None:
+        cards.append(_card("Val Loss", f"{val_loss:.4f}"))
+
+    return f"<div class='kpi-grid'>{''.join(cards)}</div>"
+
+
+def _render_diag(df: pd.DataFrame) -> str:
+    if df.empty or len(df) < 6:
+        return ""
+    val_candidates = [
+        "val/box_loss",
+        "val/cls_loss",
+        "val/dfl_loss",
+        "val/box_om",
+        "val/cls_om",
+        "val/dfl_om",
+        "val/box_oo",
+        "val/cls_oo",
+        "val/dfl_oo",
+    ]
+    val_cols = []
+    for col in val_candidates:
+        col_name = _find_col(df, col) or (col if col in df.columns else None)
+        if col_name:
+            val_cols.append(col_name)
+    map_col = _find_col(df, "metrics/mAP50-95(B)")
+    if not val_cols or not map_col:
+        return ""
+    val_df = df[val_cols].apply(pd.to_numeric, errors="coerce")
+    val_sum = val_df.sum(axis=1)
+    recent = val_sum.tail(5)
+    map_recent = pd.to_numeric(df[map_col], errors="coerce").tail(8)
+    if recent.is_monotonic_increasing and map_recent.max() <= map_recent.iloc[0] + 1e-6:
+        return "<div class='diag-note'>! Val loss rising while mAP stagnates. Consider lowering LR or adding augmentation.</div>"
+    return ""
+
+
+def _filter_table(df: pd.DataFrame, query: str) -> pd.DataFrame:
+    if df.empty:
+        return df
+    q = (query or "").strip()
+    if q.startswith("cols="):
+        tokens = [t.strip().lower() for t in q[5:].split(",") if t.strip()]
+        if tokens:
+            cols = [c for c in df.columns if any(t in c.lower() for t in tokens)]
+            df = df[cols] if cols else df
+        return df
+    if q:
+        mask = df.astype(str).apply(lambda s: s.str.contains(q, case=False, na=False))
+        df = df[mask.any(axis=1)]
+    return df
+
+
 def main() -> gr.Blocks:
     css = _load_css()
     with gr.Blocks(css=css) as demo:
@@ -494,6 +1021,8 @@ def main() -> gr.Blocks:
         train_adv_pretrained_state = gr.State(value=None)
         predict_pretrained_state = gr.State(value=None)
         predict_adv_pretrained_state = gr.State(value=None)
+        train_metrics_state = gr.State(value=_init_results_state())
+        train_run_state = gr.State(value="")
 
         def _sync_mode(mode_value):
             return (
@@ -515,14 +1044,308 @@ def main() -> gr.Blocks:
         )
 
         def _validate_data(path: str) -> str:
-            if not path:
-                return "Missing data path."
-            return "OK" if Path(path).exists() else "File not found."
+            return _render_data_status(path)
 
         train_ui["validate_btn"].click(
             _validate_data,
             inputs=train_ui["data_path"],
             outputs=train_ui["data_status"],
+        )
+
+        def _resolve_run_path(run_state: str, output_dir: str, adv_output_dir: str) -> Optional[Path]:
+            raw = (run_state or "").strip() or (output_dir or "").strip() or (adv_output_dir or "").strip()
+            if not raw and LAST_TRAIN_RUN_DIR:
+                raw = LAST_TRAIN_RUN_DIR
+            if not raw and LAST_RESULTS_CSV:
+                raw = str(Path(LAST_RESULTS_CSV).parent)
+            if raw:
+                return _resolve_actual_run_dir(_resolve_local_path(raw))
+            return None
+
+        def _export_results(
+            run_state: str,
+            output_dir: str,
+            adv_output_dir: str,
+            log_text: str,
+            adv_log_text: str,
+        ) -> Optional[str]:
+            resolved = _resolve_run_path(run_state, output_dir, adv_output_dir)
+            if not resolved:
+                resolved = _extract_save_dir(adv_log_text or log_text)
+            if not resolved:
+                return None
+            csv_path = _find_results_csv(resolved)
+            return str(csv_path) if csv_path else None
+
+        train_ui["export_btn"].click(
+            _export_results,
+            inputs=[
+                train_run_state,
+                train_ui["output_dir"],
+                train_ui["adv_output_dir"],
+                train_ui["log_box"],
+                train_ui["adv_log"],
+            ],
+            outputs=train_ui["export_file"],
+        )
+
+        def _update_metrics(
+            run_state,
+            output_dir,
+            adv_output_dir,
+            log_text,
+            adv_log_text,
+            smooth_toggle,
+            view_range,
+            table_filter,
+            state,
+        ):
+            def _debug_metrics(message: str) -> None:
+                last = state.get("debug_last")
+                if message != last:
+                    print(f"[metrics-debug] {message}", file=sys.stderr, flush=True)
+                    state["debug_last"] = message
+
+            resolved = _resolve_run_path(run_state, output_dir, adv_output_dir)
+            extracted = _extract_save_dir(adv_log_text or log_text)
+            if not resolved and LAST_RESULTS_CSV:
+                _debug_metrics(f"fallback last_results_csv={LAST_RESULTS_CSV}")
+            if not resolved and extracted:
+                resolved = _resolve_actual_run_dir(extracted)
+            if not resolved:
+                _debug_metrics(
+                    f"no_run resolved=None run_state={run_state!r} output_dir={output_dir!r} "
+                    f"adv_output_dir={adv_output_dir!r} extracted={str(extracted) if extracted else None} "
+                    f"last_run={LAST_TRAIN_RUN_DIR!r} last_csv={LAST_RESULTS_CSV!r}"
+                )
+                empty_fig = _empty_plot("Select or start a run")
+                return (
+                    "<div class='metrics-empty'>No run selected.</div>",
+                    "",
+                    empty_fig,
+                    empty_fig,
+                    empty_fig,
+                    gr.update(value=pd.DataFrame()),
+                    state,
+                    run_state,
+                )
+            csv_path = _find_results_csv(resolved)
+            if not csv_path:
+                _debug_metrics(
+                    f"no_results_csv resolved={str(resolved)} exists={resolved.exists()} "
+                    f"last_csv={LAST_RESULTS_CSV!r}"
+                )
+                empty_fig = _empty_plot("Waiting for results.csv...")
+                return (
+                    "<div class='metrics-empty'>Waiting for results.csv...</div>",
+                    "",
+                    empty_fig,
+                    empty_fig,
+                    empty_fig,
+                    pd.DataFrame(),
+                    state,
+                    str(resolved),
+                )
+            print(f"[metrics-debug] csv_path={csv_path}", file=sys.stderr, flush=True)
+            resolved = csv_path.parent
+            if state.get("debug_path") != str(resolved):
+                _debug_metrics(f"resolved_path={str(resolved)} csv_path={str(csv_path)}")
+                state["debug_path"] = str(resolved)
+            try:
+                state, df = _read_results_incremental(state, csv_path)
+            except Exception as exc:
+                _debug_metrics(f"read_results_error path={str(csv_path)} err={exc}")
+                traceback.print_exc()
+                empty_fig = _empty_plot("Waiting for results.csv...")
+                return (
+                    "<div class='metrics-empty'>Waiting for results.csv...</div>",
+                    "",
+                    empty_fig,
+                    empty_fig,
+                    empty_fig,
+                    pd.DataFrame(),
+                    state,
+                    str(resolved),
+                )
+            if df.empty:
+                file_size = csv_path.stat().st_size if csv_path.exists() else 0
+                _debug_metrics(f"results_empty path={str(csv_path)} size={file_size}")
+                empty_fig = _empty_plot("Waiting for results.csv...")
+                return (
+                    "<div class='metrics-empty'>Waiting for results.csv...</div>",
+                    "",
+                    empty_fig,
+                    empty_fig,
+                    empty_fig,
+                    pd.DataFrame(),
+                    state,
+                    str(resolved),
+                )
+            cols_signature = tuple(df.columns)
+            rows_count = len(df)
+            if state.get("debug_rows") != rows_count or state.get("debug_cols") != cols_signature:
+                _debug_metrics(f"results_ok rows={rows_count} cols={cols_signature}")
+                state["debug_rows"] = rows_count
+                state["debug_cols"] = cols_signature
+
+            df_view = _apply_view(df, view_range)
+            all_cols = [
+                "train/box_loss",
+                "train/cls_loss",
+                "train/dfl_loss",
+                "train/box_om",
+                "train/cls_om",
+                "train/dfl_om",
+                "train/box_oo",
+                "train/cls_oo",
+                "train/dfl_oo",
+                "val/box_loss",
+                "val/cls_loss",
+                "val/dfl_loss",
+                "val/box_om",
+                "val/cls_om",
+                "val/dfl_om",
+                "val/box_oo",
+                "val/cls_oo",
+                "val/dfl_oo",
+                "metrics/mAP50(B)",
+                "metrics/mAP50-95(B)",
+                "metrics/precision(B)",
+                "metrics/recall(B)",
+                "lr/pg0",
+                "lr/pg1",
+                "lr/pg2",
+            ]
+            smooth_cols = [c for c in all_cols if _find_col(df_view, c)]
+            df_smooth = _apply_smoothing(df_view, smooth_cols, 5, bool(smooth_toggle))
+
+            loss_series = []
+            loss_groups = [
+                ("train", "box"),
+                ("train", "cls"),
+                ("train", "dfl"),
+                ("val", "box"),
+                ("val", "cls"),
+                ("val", "dfl"),
+            ]
+            for split, kind in loss_groups:
+                base = f"{split}/{kind}_loss"
+                col = _find_col(df_smooth, base)
+                if col:
+                    loss_series.append((col, f"{split} {kind} loss"))
+                    continue
+                for suffix, label in (("om", "om"), ("oo", "oo")):
+                    alt = f"{split}/{kind}_{suffix}"
+                    if alt in df_smooth.columns:
+                        loss_series.append((alt, f"{split} {kind} {label}"))
+            metric_series = []
+            for key in ("metrics/mAP50(B)", "metrics/mAP50-95(B)", "metrics/precision(B)", "metrics/recall(B)"):
+                col = _find_col(df_smooth, key)
+                if col:
+                    metric_series.append((col, key.replace("metrics/", "")))
+            lr_series = []
+            for key in ("lr/pg0", "lr/pg1", "lr/pg2"):
+                col = _find_col(df_smooth, key)
+                if col:
+                    lr_series.append((col, key))
+
+            if not df_smooth.empty:
+                last_row = df_smooth.tail(1).to_dict(orient="records")[0]
+                print(
+                    f"[metrics-debug] plot_input rows={len(df_smooth)} cols={list(df_smooth.columns)} last={last_row}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                print(
+                    f"[metrics-debug] loss_series={loss_series} metric_series={metric_series} lr_series={lr_series}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            loss_fig = _plot_series(df_smooth, "epoch", loss_series)
+            metric_fig = _plot_series(df_smooth, "epoch", metric_series)
+            lr_fig = _plot_series(df_smooth, "epoch", lr_series)
+
+            table_df = _filter_table(df_view, table_filter)
+            table_signature = None
+            if not table_df.empty:
+                last_row = table_df.tail(1).to_numpy().ravel().tolist()
+                table_signature = (len(table_df), tuple(table_df.columns), tuple(last_row))
+            else:
+                table_signature = (0, tuple(table_df.columns), tuple())
+            if state.get("table_signature") == table_signature:
+                table_update = gr.update()
+            else:
+                state["table_signature"] = table_signature
+                table_update = table_df
+
+            return (
+                _render_kpis(df),
+                _render_diag(df),
+                loss_fig,
+                metric_fig,
+                lr_fig,
+                table_update,
+                state,
+                str(resolved),
+            )
+
+        load_kwargs = {}
+        try:
+            if "queue" in inspect.signature(demo.load).parameters:
+                load_kwargs["queue"] = False
+        except (TypeError, ValueError):
+            pass
+
+        demo.load(
+            _update_metrics,
+            inputs=[
+                train_run_state,
+                train_ui["output_dir"],
+                train_ui["adv_output_dir"],
+                train_ui["log_box"],
+                train_ui["adv_log"],
+                train_ui["smooth_toggle"],
+                train_ui["view_range"],
+                train_ui["table_filter"],
+                train_metrics_state,
+            ],
+            outputs=[
+                train_ui["kpi_html"],
+                train_ui["diag_html"],
+                train_ui["loss_plot"],
+                train_ui["metric_plot"],
+                train_ui["lr_plot"],
+                train_ui["metrics_table"],
+                train_metrics_state,
+                train_run_state,
+            ],
+            **load_kwargs,
+        )
+
+        train_ui["metrics_tick"].click(
+            _update_metrics,
+            inputs=[
+                train_run_state,
+                train_ui["output_dir"],
+                train_ui["adv_output_dir"],
+                train_ui["log_box"],
+                train_ui["adv_log"],
+                train_ui["smooth_toggle"],
+                train_ui["view_range"],
+                train_ui["table_filter"],
+                train_metrics_state,
+            ],
+            outputs=[
+                train_ui["kpi_html"],
+                train_ui["diag_html"],
+                train_ui["loss_plot"],
+                train_ui["metric_plot"],
+                train_ui["lr_plot"],
+                train_ui["metrics_table"],
+                train_metrics_state,
+                train_run_state,
+            ],
+            queue=False,
         )
 
         def _refresh_dropdowns(train_value=None, adv_train_value=None, pred_value=None, adv_pred_value=None):
@@ -713,10 +1536,13 @@ def main() -> gr.Blocks:
                 "batch": batch_value,
                 "device": device,
                 "workers": int(workers),
+                "amp": False,
+                "verbose": True,
             }
             run_dir = _run_dir_path("train", run_name, create=create_run_dir)
             args["project"] = str(run_dir.parent)
             args["name"] = run_dir.name
+            args["exist_ok"] = True
             return args
 
         def _update_basic_train_cli(*inputs):
@@ -746,10 +1572,24 @@ def main() -> gr.Blocks:
 
         def _run_basic_train(*inputs, progress=gr.Progress()):
             log = ""
+            run_dir = _run_dir_path("train", inputs[-1], create=False)
+            run_dir_str = str(run_dir)
+            run_dir_abs = str(_resolve_local_path(run_dir_str))
             try:
+                global LAST_TRAIN_RUN_DIR
+                LAST_TRAIN_RUN_DIR = run_dir_abs
                 log = _append_log(log, "[status] Resolving model...")
-                yield log, "", "", ""
-                args = _basic_train_args(*inputs, create_run_dir=True)
+                yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
+                args = _basic_train_args(*inputs, create_run_dir=False)
+                run_dir = Path(args["project"]) / args["name"]
+                run_dir_str = str(run_dir)
+                run_dir_abs = str(_resolve_local_path(run_dir_str))
+                LAST_TRAIN_RUN_DIR = run_dir_abs
+                if _run_dir_has_content(run_dir):
+                    conflict_group, conflict_message = _show_conflict(run_dir)
+                    yield log, "", "", "", conflict_group, conflict_message, ""
+                    return
+                run_dir.mkdir(parents=True, exist_ok=True)
                 expected_path, existed, mtime_before = (None, False, None)
                 if inputs[1] == "Pretrained":
                     expected_path, existed, mtime_before = _model_cache_state(inputs[2])
@@ -758,7 +1598,7 @@ def main() -> gr.Blocks:
                         log = _append_log(log, "[status] Found cached model file, verifying checksum...")
                     else:
                         log = _append_log(log, "[status] Downloading model from GitHub release...")
-                    yield log, "", "", ""
+                    yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
                 start_time = time.time()
                 if inputs[1] == "Pretrained":
                     tracker = _ProgressTracker(progress)
@@ -783,13 +1623,13 @@ def main() -> gr.Blocks:
                         msg = tracker.consume()
                         if msg:
                             log = _append_log(log, f"[download] {msg}")
-                            yield log, "", "", ""
+                            yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
                         time.sleep(0.2)
                     thread.join()
                     msg = tracker.flush()
                     if msg:
                         log = _append_log(log, f"[download] {msg}")
-                        yield log, "", "", ""
+                        yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
                     if error.get("exc"):
                         raise error["exc"]
                     model_path = result["path"]
@@ -809,7 +1649,7 @@ def main() -> gr.Blocks:
                         log,
                         f"[status] Download complete: {_format_size_mb(size_bytes)} in {elapsed:.1f}s ({speed}).",
                     )
-                    yield log, "", "", ""
+                    yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
                 elif expected_path and existed:
                     mtime_after = model_path.stat().st_mtime if model_path.exists() else None
                     if mtime_before and mtime_after and mtime_after > mtime_before:
@@ -821,31 +1661,57 @@ def main() -> gr.Blocks:
                         )
                     else:
                         log = _append_log(log, "[status] Model cached, skip download.")
-                    yield log, "", "", ""
+                    yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
                 args["model"] = str(model_path)
-                run_dir = Path(args["project"]) / args["name"]
                 cmd, preview = build_command("detect", "train", args)
                 write_run_metadata(run_dir, args, preview)
                 log = _append_log(log, "[status] Launching process...")
-                yield log, str(run_dir), "", ""
+                yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
                 process = start_process(cmd)
+                print(f"[train-debug] run_dir={run_dir_str}", file=sys.stderr, flush=True)
+                print(
+                    f"[train-debug] results_csv={_resolve_local_path(run_dir_str) / 'results.csv'}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                results_csv_path = _resolve_local_path(run_dir_str) / "results.csv"
+                results_csv_logged = False
+                had_real_output = False
                 for line in stream_logs(
                     process,
-                    heartbeat=5.0,
-                    heartbeat_message="[status] Training running, waiting for output...",
+                    heartbeat=None,
+                    heartbeat_message=None,
                 ):
-                    clean_line = _strip_ansi(line)
-                    log = _append_log_lines(log, clean_line)
-                    yield log, str(run_dir), "", ""
+                    if line and not line.startswith("[status] Training running"):
+                        had_real_output = True
+                    if not results_csv_logged and results_csv_path.exists():
+                        global LAST_RESULTS_CSV
+                        LAST_RESULTS_CSV = str(results_csv_path)
+                        print(
+                            f"[train-debug] results_csv_found={results_csv_path}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        results_csv_logged = True
+                    log = _append_log_raw(log, _strip_ansi(line))
+                    yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
                 best = run_dir / "weights" / "best.pt"
                 last = run_dir / "weights" / "last.pt"
-                yield log, str(run_dir), str(best) if best.exists() else "", str(last) if last.exists() else ""
+                yield (
+                    log,
+                    run_dir_str,
+                    str(best) if best.exists() else "",
+                    str(last) if last.exists() else "",
+                    gr.update(visible=False),
+                    "",
+                    run_dir_abs,
+                )
             except Exception as exc:
                 _log_exception("basic train", exc)
                 log = _append_log(log, f"Error: {exc}")
-                yield log, "", "", ""
+                yield log, "", "", "", gr.update(visible=False), "", ""
 
-        train_ui["start_btn"].click(
+        basic_train_event = train_ui["start_btn"].click(
             _run_basic_train,
             inputs=basic_train_inputs,
             outputs=[
@@ -853,6 +1719,9 @@ def main() -> gr.Blocks:
                 train_ui["output_dir"],
                 train_ui["best_path"],
                 train_ui["last_path"],
+                train_ui["basic_conflict_group"],
+                train_ui["basic_conflict_message"],
+                train_run_state,
             ],
         )
 
@@ -864,7 +1733,47 @@ def main() -> gr.Blocks:
             stop_process()
             return _render_predict_status("[status] Stopped by user.")
 
-        train_ui["stop_btn"].click(_stop_train, inputs=None, outputs=train_ui["log_box"])
+        train_ui["stop_btn"].click(
+            _stop_train,
+            inputs=None,
+            outputs=train_ui["log_box"],
+            cancels=[basic_train_event],
+        )
+
+        def _show_conflict(run_dir: Path) -> Tuple[Any, Any]:
+            message = f"Run directory already exists: `{run_dir}`."
+            return gr.update(visible=True), message
+
+        def _hide_conflict() -> Tuple[Any, str]:
+            return gr.update(visible=False), ""
+
+        def _handle_conflict_action(action: str, new_name: str, run_name: str) -> Tuple[Any, Any, Any]:
+            if action == "Rename run":
+                updated = (new_name or "").strip() or run_name
+                return gr.update(value=updated), gr.update(visible=False), ""
+            return gr.update(value=run_name), gr.update(visible=False), ""
+
+        train_ui["basic_conflict_confirm"].click(
+            _handle_conflict_action,
+            inputs=[train_ui["basic_conflict_action"], train_ui["basic_conflict_name"], train_ui["run_name"]],
+            outputs=[train_ui["run_name"], train_ui["basic_conflict_group"], train_ui["basic_conflict_message"]],
+        )
+        train_ui["basic_conflict_cancel"].click(
+            _hide_conflict,
+            inputs=None,
+            outputs=[train_ui["basic_conflict_group"], train_ui["basic_conflict_message"]],
+        )
+
+        train_ui["adv_conflict_confirm"].click(
+            _handle_conflict_action,
+            inputs=[train_ui["adv_conflict_action"], train_ui["adv_conflict_name"], train_ui["adv_run_name"]],
+            outputs=[train_ui["adv_run_name"], train_ui["adv_conflict_group"], train_ui["adv_conflict_message"]],
+        )
+        train_ui["adv_conflict_cancel"].click(
+            _hide_conflict,
+            inputs=None,
+            outputs=[train_ui["adv_conflict_group"], train_ui["adv_conflict_message"]],
+        )
 
         def _set_predict_model(best_path, last_path):
             path = best_path or last_path
@@ -895,6 +1804,8 @@ def main() -> gr.Blocks:
             run_dir = _run_dir_path("train", run_name, create=create_run_dir)
             values["project"] = str(run_dir.parent)
             values["name"] = run_dir.name
+            values["exist_ok"] = True
+            values["verbose"] = True
             return values
 
         def _gather_adv_values(adv_flat: Dict[str, Any], adv_values: List):
@@ -955,10 +1866,23 @@ def main() -> gr.Blocks:
             progress=gr.Progress(),
         ):
             log = ""
+            run_dir = _run_dir_path("train", run_name, create=False)
+            run_dir_str = str(run_dir)
+            run_dir_abs = str(_resolve_local_path(run_dir_str))
             try:
+                global LAST_TRAIN_RUN_DIR
+                LAST_TRAIN_RUN_DIR = run_dir_abs
                 log = _append_log(log, "[status] Resolving model...")
-                yield log, "", "", ""
+                yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
                 values = _gather_adv_values(train_ui["adv_flat"], list(adv_values))
+                run_dir = _run_dir_path("train", run_name, create=False)
+                run_dir_str = str(run_dir)
+                run_dir_abs = str(_resolve_local_path(run_dir_str))
+                LAST_TRAIN_RUN_DIR = run_dir_abs
+                if _run_dir_has_content(run_dir):
+                    conflict_group, conflict_message = _show_conflict(run_dir)
+                    yield log, "", "", "", conflict_group, conflict_message, ""
+                    return
                 expected_path, existed, mtime_before = (None, False, None)
                 if adv_model_source == "Pretrained":
                     expected_path, existed, mtime_before = _model_cache_state(adv_pretrained_model)
@@ -967,7 +1891,7 @@ def main() -> gr.Blocks:
                         log = _append_log(log, "[status] Found cached model file, verifying checksum...")
                     else:
                         log = _append_log(log, "[status] Downloading model from GitHub release...")
-                    yield log, "", "", ""
+                    yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
                 start_time = time.time()
                 if adv_model_source == "Pretrained":
                     tracker = _ProgressTracker(progress)
@@ -992,13 +1916,13 @@ def main() -> gr.Blocks:
                         msg = tracker.consume()
                         if msg:
                             log = _append_log(log, f"[download] {msg}")
-                            yield log, "", "", ""
+                            yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
                         time.sleep(0.2)
                     thread.join()
                     msg = tracker.flush()
                     if msg:
                         log = _append_log(log, f"[download] {msg}")
-                        yield log, "", "", ""
+                        yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
                     if error.get("exc"):
                         raise error["exc"]
                     model_path = result["path"]
@@ -1018,7 +1942,7 @@ def main() -> gr.Blocks:
                         log,
                         f"[status] Download complete: {_format_size_mb(size_bytes)} in {elapsed:.1f}s ({speed}).",
                     )
-                    yield log, "", "", ""
+                    yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
                 elif expected_path and existed:
                     mtime_after = model_path.stat().st_mtime if model_path.exists() else None
                     if mtime_before and mtime_after and mtime_after > mtime_before:
@@ -1030,35 +1954,62 @@ def main() -> gr.Blocks:
                         )
                     else:
                         log = _append_log(log, "[status] Model cached, skip download.")
-                    yield log, "", "", ""
+                    yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
                 values["model"] = str(model_path)
                 if adv_data_path:
                     values["data"] = adv_data_path
-                run_dir = _run_dir_path("train", run_name, create=True)
+                run_dir.mkdir(parents=True, exist_ok=True)
                 values["project"] = str(run_dir.parent)
                 values["name"] = run_dir.name
                 cmd, preview = build_command("detect", "train", values)
                 write_run_metadata(run_dir, values, preview)
                 log = _append_log(log, "[status] Launching process...")
-                yield log, str(run_dir), "", ""
+                yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
                 process = start_process(cmd)
+                print(f"[train-debug] run_dir={run_dir_str}", file=sys.stderr, flush=True)
+                print(
+                    f"[train-debug] results_csv={_resolve_local_path(run_dir_str) / 'results.csv'}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                results_csv_path = _resolve_local_path(run_dir_str) / "results.csv"
+                results_csv_logged = False
+                had_real_output = False
                 for line in stream_logs(
                     process,
-                    heartbeat=5.0,
-                    heartbeat_message="[status] Training running, waiting for output...",
+                    heartbeat=None,
+                    heartbeat_message=None,
                 ):
-                    clean_line = _strip_ansi(line)
-                    log = _append_log_lines(log, clean_line)
-                    yield log, str(run_dir), "", ""
+                    if line and not line.startswith("[status] Training running"):
+                        had_real_output = True
+                    if not results_csv_logged and results_csv_path.exists():
+                        global LAST_RESULTS_CSV
+                        LAST_RESULTS_CSV = str(results_csv_path)
+                        print(
+                            f"[train-debug] results_csv_found={results_csv_path}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        results_csv_logged = True
+                    log = _append_log_raw(log, _strip_ansi(line))
+                    yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
                 best = run_dir / "weights" / "best.pt"
                 last = run_dir / "weights" / "last.pt"
-                yield log, str(run_dir), str(best) if best.exists() else "", str(last) if last.exists() else ""
+                yield (
+                    log,
+                    run_dir_str,
+                    str(best) if best.exists() else "",
+                    str(last) if last.exists() else "",
+                    gr.update(visible=False),
+                    "",
+                    run_dir_abs,
+                )
             except Exception as exc:
                 _log_exception("advanced train", exc)
                 log = _append_log(log, f"Error: {exc}")
-                yield log, "", "", ""
+                yield log, "", "", "", gr.update(visible=False), "", ""
 
-        train_ui["adv_start"].click(
+        adv_train_event = train_ui["adv_start"].click(
             _run_adv_train,
             inputs=adv_train_inputs,
             outputs=[
@@ -1066,9 +2017,17 @@ def main() -> gr.Blocks:
                 train_ui["adv_output_dir"],
                 train_ui["adv_best_path"],
                 train_ui["adv_last_path"],
+                train_ui["adv_conflict_group"],
+                train_ui["adv_conflict_message"],
+                train_run_state,
             ],
         )
-        train_ui["adv_stop"].click(_stop_train, inputs=None, outputs=train_ui["adv_log"])
+        train_ui["adv_stop"].click(
+            _stop_train,
+            inputs=None,
+            outputs=train_ui["adv_log"],
+            cancels=[adv_train_event],
+        )
         train_ui["adv_set_predict_btn"].click(
             _set_predict_model,
             inputs=[train_ui["adv_best_path"], train_ui["adv_last_path"]],
@@ -1482,4 +2441,4 @@ def main() -> gr.Blocks:
 
 
 if __name__ == "__main__":
-    main().queue().launch()
+    main().queue(concurrency_count=2).launch()
