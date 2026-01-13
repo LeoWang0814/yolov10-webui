@@ -1,3 +1,4 @@
+import html
 import re
 import shutil
 import subprocess
@@ -422,6 +423,52 @@ def _extract_results_dir(log_text: str) -> Optional[Path]:
     return None
 
 
+def _predict_status_snapshot(log: str) -> Tuple[str, str]:
+    lines = [line.strip() for line in log.splitlines() if line.strip()]
+    last_line = lines[-1] if lines else "Idle."
+    stage = "Idle"
+
+    for line in reversed(lines):
+        if "Download complete" in line:
+            stage = "Download complete"
+            break
+        if "Downloading model" in line:
+            stage = "Downloading model"
+            break
+        if "Found cached model file" in line or "Model cached" in line:
+            stage = "Model cached"
+            break
+        if "Preparing source" in line:
+            stage = "Preparing source"
+            break
+        if "Launching process" in line:
+            stage = "Launching process"
+            break
+        if "Model running" in line:
+            stage = "Running inference"
+            break
+
+    return stage, last_line
+
+
+def _render_predict_status(log: str) -> str:
+    stage, last_line = _predict_status_snapshot(log)
+    safe_stage = html.escape(stage)
+    safe_line = html.escape(last_line)
+    return f"""
+    <div class="predict-status">
+      <div class="predict-status-header">
+        <div class="predict-status-title">Status <span class="predict-status-hint">(Detailed logs in terminal)</span></div>
+        <div class="predict-status-stage">{safe_stage}</div>
+      </div>
+      <div class="predict-status-body">
+        <div class="predict-status-label">Last message</div>
+        <div class="predict-status-value">{safe_line}</div>
+      </div>
+    </div>
+    """
+
+
 def main() -> gr.Blocks:
     css = _load_css()
     with gr.Blocks(css=css) as demo:
@@ -431,41 +478,6 @@ def main() -> gr.Blocks:
               <h1>YOLOv10 WebUI</h1>
               <div class="subtle">Train and Predict with a fast, reproducible workflow.</div>
             </div>
-            """
-        )
-        gr.HTML(
-            """
-            <script>
-            (function () {
-              const IDS = ["train-log", "train-adv-log", "predict-log", "predict-adv-log"];
-              const POLL_MS = 150;
-              function getTextarea(id) {
-                const root = document.getElementById(id);
-                if (!root) return null;
-                return root.tagName === "TEXTAREA" ? root : root.querySelector("textarea");
-              }
-              const state = new Map();
-              function bottomScroll(ta) {
-                ta.scrollTop = ta.scrollHeight;
-              }
-              function tick() {
-                IDS.forEach((id) => {
-                  const ta = getTextarea(id);
-                  if (!ta) return;
-                  const value = ta.value || "";
-                  const last = state.get(id);
-                  if (!last || last.value !== value) {
-                    state.set(id, { value });
-                    bottomScroll(ta);
-                    setTimeout(() => bottomScroll(ta), 0);
-                    setTimeout(() => bottomScroll(ta), 50);
-                  }
-                });
-              }
-              setInterval(tick, POLL_MS);
-              tick();
-            })();
-            </script>
             """
         )
         status_bar()
@@ -848,6 +860,10 @@ def main() -> gr.Blocks:
             stop_process()
             return "Stopped by user."
 
+        def _stop_predict():
+            stop_process()
+            return _render_predict_status("[status] Stopped by user.")
+
         train_ui["stop_btn"].click(_stop_train, inputs=None, outputs=train_ui["log_box"])
 
         def _set_predict_model(best_path, last_path):
@@ -1123,7 +1139,8 @@ def main() -> gr.Blocks:
             log = ""
             try:
                 log = _append_log(log, "[status] Resolving model...")
-                yield log, [], None, ""
+                print("[status] Resolving model...")
+                yield _render_predict_status(log), [], None, ""
                 args = _basic_predict_args(*inputs)
                 expected_path, existed, mtime_before = (None, False, None)
                 if inputs[0] == "Pretrained":
@@ -1133,7 +1150,8 @@ def main() -> gr.Blocks:
                         log = _append_log(log, "[status] Found cached model file, verifying checksum...")
                     else:
                         log = _append_log(log, "[status] Downloading model from GitHub release...")
-                    yield log, [], None, ""
+                    print(log.splitlines()[-1])
+                    yield _render_predict_status(log), [], None, ""
                 start_time = time.time()
                 if inputs[0] == "Pretrained":
                     tracker = _ProgressTracker(progress)
@@ -1158,13 +1176,15 @@ def main() -> gr.Blocks:
                         msg = tracker.consume()
                         if msg:
                             log = _append_log(log, f"[download] {msg}")
-                            yield log, [], None, ""
+                            print(f"[download] {msg}")
+                            yield _render_predict_status(log), [], None, ""
                         time.sleep(0.2)
                     thread.join()
                     msg = tracker.flush()
                     if msg:
                         log = _append_log(log, f"[download] {msg}")
-                        yield log, [], None, ""
+                        print(f"[download] {msg}")
+                        yield _render_predict_status(log), [], None, ""
                     if error.get("exc"):
                         raise error["exc"]
                     model_path = result["path"]
@@ -1184,7 +1204,8 @@ def main() -> gr.Blocks:
                         log,
                         f"[status] Download complete: {_format_size_mb(size_bytes)} in {elapsed:.1f}s ({speed}).",
                     )
-                    yield log, [], None, ""
+                    print(log.splitlines()[-1])
+                    yield _render_predict_status(log), [], None, ""
                 elif expected_path and existed:
                     mtime_after = model_path.stat().st_mtime if model_path.exists() else None
                     if mtime_before and mtime_after and mtime_after > mtime_before:
@@ -1196,12 +1217,15 @@ def main() -> gr.Blocks:
                         )
                     else:
                         log = _append_log(log, "[status] Model cached, skip download.")
-                    yield log, [], None, ""
+                    print(log.splitlines()[-1])
+                    yield _render_predict_status(log), [], None, ""
                 args["model"] = str(model_path)
                 log = _append_log(log, f"[status] Using model: {model_path}")
+                print(log.splitlines()[-1])
                 run_dir = _run_dir_path("predict", None, create=True)
-                yield log, [], None, str(run_dir)
+                yield _render_predict_status(log), [], None, str(run_dir)
                 log = _append_log(log, "[status] Preparing source...")
+                print(log.splitlines()[-1])
                 source = _prepare_source(inputs[3], inputs[4], inputs[5], inputs[6], inputs[7], run_dir, preview=False)
                 args["source"] = source
                 args["project"] = str(run_dir.parent)
@@ -1209,7 +1233,8 @@ def main() -> gr.Blocks:
                 cmd, preview = build_command("detect", "predict", args)
                 write_run_metadata(run_dir, args, preview)
                 log = _append_log(log, "[status] Launching process...")
-                yield log, [], None, str(run_dir)
+                print(log.splitlines()[-1])
+                yield _render_predict_status(log), [], None, str(run_dir)
                 process = start_process(cmd)
                 for line in stream_logs(
                     process,
@@ -1218,28 +1243,30 @@ def main() -> gr.Blocks:
                 ):
                     clean_line = _strip_ansi(line)
                     log = _append_log_lines(log, clean_line)
-                    yield log, [], None, str(run_dir)
+                    print(clean_line, end="" if clean_line.endswith("\n") else "\n")
+                    yield _render_predict_status(log), [], None, str(run_dir)
                 parsed_dir = _extract_results_dir(log)
                 actual_dir = parsed_dir if parsed_dir else _resolve_actual_run_dir(run_dir)
                 images, video = _collect_outputs(actual_dir)
-                yield log, images, video, str(actual_dir.resolve())
+                yield _render_predict_status(log), images, video, str(actual_dir.resolve())
             except Exception as exc:
                 _log_exception("basic predict", exc)
                 log = _append_log(log, f"Error: {exc}")
-                yield log, [], None, ""
+                print(f"[error] {exc}")
+                yield _render_predict_status(log), [], None, ""
 
         predict_ui["start_btn"].click(
             _run_basic_predict,
             inputs=basic_predict_inputs,
             outputs=[
-                predict_ui["log_box"],
+                predict_ui["status_html"],
                 predict_ui["output_gallery"],
                 predict_ui["output_video"],
                 predict_ui["output_dir"],
             ],
         )
 
-        predict_ui["stop_btn"].click(_stop_train, inputs=None, outputs=predict_ui["log_box"])
+        predict_ui["stop_btn"].click(_stop_predict, inputs=None, outputs=predict_ui["status_html"])
 
         def _advanced_predict_args(
             adv_model_source,
@@ -1311,7 +1338,8 @@ def main() -> gr.Blocks:
             log = ""
             try:
                 log = _append_log(log, "[status] Resolving model...")
-                yield log, [], None, ""
+                print("[status] Resolving model...")
+                yield _render_predict_status(log), [], None, ""
                 values = _gather_adv_values(predict_ui["adv_flat"], list(adv_values))
                 expected_path, existed, mtime_before = (None, False, None)
                 if adv_model_source == "Pretrained":
@@ -1321,7 +1349,8 @@ def main() -> gr.Blocks:
                         log = _append_log(log, "[status] Found cached model file, verifying checksum...")
                     else:
                         log = _append_log(log, "[status] Downloading model from GitHub release...")
-                    yield log, [], None, ""
+                    print(log.splitlines()[-1])
+                    yield _render_predict_status(log), [], None, ""
                 start_time = time.time()
                 if adv_model_source == "Pretrained":
                     tracker = _ProgressTracker(progress)
@@ -1346,13 +1375,15 @@ def main() -> gr.Blocks:
                         msg = tracker.consume()
                         if msg:
                             log = _append_log(log, f"[download] {msg}")
-                            yield log, [], None, ""
+                            print(f"[download] {msg}")
+                            yield _render_predict_status(log), [], None, ""
                         time.sleep(0.2)
                     thread.join()
                     msg = tracker.flush()
                     if msg:
                         log = _append_log(log, f"[download] {msg}")
-                        yield log, [], None, ""
+                        print(f"[download] {msg}")
+                        yield _render_predict_status(log), [], None, ""
                     if error.get("exc"):
                         raise error["exc"]
                     model_path = result["path"]
@@ -1372,7 +1403,8 @@ def main() -> gr.Blocks:
                         log,
                         f"[status] Download complete: {_format_size_mb(size_bytes)} in {elapsed:.1f}s ({speed}).",
                     )
-                    yield log, [], None, ""
+                    print(log.splitlines()[-1])
+                    yield _render_predict_status(log), [], None, ""
                 elif expected_path and existed:
                     mtime_after = model_path.stat().st_mtime if model_path.exists() else None
                     if mtime_before and mtime_after and mtime_after > mtime_before:
@@ -1384,12 +1416,15 @@ def main() -> gr.Blocks:
                         )
                     else:
                         log = _append_log(log, "[status] Model cached, skip download.")
-                    yield log, [], None, ""
+                    print(log.splitlines()[-1])
+                    yield _render_predict_status(log), [], None, ""
                 values["model"] = str(model_path)
                 log = _append_log(log, f"[status] Using model: {model_path}")
+                print(log.splitlines()[-1])
                 run_dir = _run_dir_path("predict", None, create=True)
-                yield log, [], None, str(run_dir)
+                yield _render_predict_status(log), [], None, str(run_dir)
                 log = _append_log(log, "[status] Preparing source...")
+                print(log.splitlines()[-1])
                 source = _prepare_source(
                     adv_input_type,
                     adv_images,
@@ -1405,7 +1440,8 @@ def main() -> gr.Blocks:
                 cmd, preview = build_command("detect", "predict", values)
                 write_run_metadata(run_dir, values, preview)
                 log = _append_log(log, "[status] Launching process...")
-                yield log, [], None, str(run_dir)
+                print(log.splitlines()[-1])
+                yield _render_predict_status(log), [], None, str(run_dir)
                 process = start_process(cmd)
                 for line in stream_logs(
                     process,
@@ -1414,27 +1450,29 @@ def main() -> gr.Blocks:
                 ):
                     clean_line = _strip_ansi(line)
                     log = _append_log_lines(log, clean_line)
-                    yield log, [], None, str(run_dir)
+                    print(clean_line, end="" if clean_line.endswith("\n") else "\n")
+                    yield _render_predict_status(log), [], None, str(run_dir)
                 parsed_dir = _extract_results_dir(log)
                 actual_dir = parsed_dir if parsed_dir else _resolve_actual_run_dir(run_dir)
                 images, video = _collect_outputs(actual_dir)
-                yield log, images, video, str(actual_dir.resolve())
+                yield _render_predict_status(log), images, video, str(actual_dir.resolve())
             except Exception as exc:
                 _log_exception("advanced predict", exc)
                 log = _append_log(log, f"Error: {exc}")
-                yield log, [], None, ""
+                print(f"[error] {exc}")
+                yield _render_predict_status(log), [], None, ""
 
         predict_ui["adv_start"].click(
             _run_adv_predict,
             inputs=adv_predict_inputs,
             outputs=[
-                predict_ui["adv_log"],
+                predict_ui["adv_status_html"],
                 predict_ui["adv_gallery"],
                 predict_ui["adv_video"],
                 predict_ui["adv_output_dir"],
             ],
         )
-        predict_ui["adv_stop"].click(_stop_train, inputs=None, outputs=predict_ui["adv_log"])
+        predict_ui["adv_stop"].click(_stop_predict, inputs=None, outputs=predict_ui["adv_status_html"])
 
         gr.HTML(
             "<div class='app-footer'>WebUI developed by <a href='https://github.com/LeoWang0814' target='_blank'>LeoWang</a></div>"

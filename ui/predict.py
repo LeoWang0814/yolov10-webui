@@ -147,7 +147,8 @@ def build_predict_tab() -> Dict[str, Any]:
 
             start_btn = gr.Button("Run Predict", elem_classes=["accent-btn"])
             stop_btn = gr.Button("Stop", elem_classes=["secondary-btn"])
-            log_box = gr.Textbox(label="Predict Logs", lines=14)
+            with gr.Group():
+                status_html = gr.HTML(value="<div class='predict-status-empty'>Idle</div>")
             output_gallery = gr.Gallery(label="Output Images", columns=3)
             output_video = gr.Video(label="Output Video")
             output_dir = gr.Textbox(label="Output Directory", interactive=False)
@@ -155,7 +156,7 @@ def build_predict_tab() -> Dict[str, Any]:
                 {
                     "start_btn": start_btn,
                     "stop_btn": stop_btn,
-                    "log_box": log_box,
+                    "status_html": status_html,
                     "output_gallery": output_gallery,
                     "output_video": output_video,
                     "output_dir": output_dir,
@@ -239,7 +240,8 @@ def build_predict_tab() -> Dict[str, Any]:
 
             adv_start = gr.Button("Run Predict (Advanced)", elem_classes=["accent-btn"])
             adv_stop = gr.Button("Stop", elem_classes=["secondary-btn"])
-            adv_log = gr.Textbox(label="Predict Logs", lines=14)
+            with gr.Group():
+                adv_status_html = gr.HTML(value="<div class='predict-status-empty'>Idle</div>")
             adv_gallery = gr.Gallery(label="Output Images", columns=3)
             adv_video = gr.Video(label="Output Video")
             adv_output_dir = gr.Textbox(label="Output Directory", interactive=False)
@@ -248,7 +250,7 @@ def build_predict_tab() -> Dict[str, Any]:
                 {
                     "adv_start": adv_start,
                     "adv_stop": adv_stop,
-                    "adv_log": adv_log,
+                    "adv_status_html": adv_status_html,
                     "adv_gallery": adv_gallery,
                     "adv_video": adv_video,
                     "adv_output_dir": adv_output_dir,
