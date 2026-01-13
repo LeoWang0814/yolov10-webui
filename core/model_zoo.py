@@ -251,9 +251,7 @@ def model_choices() -> Tuple[Dict[str, str], Dict[str, Dict]]:
     for key, meta in models.items():
         weights_dir = _weights_dir(release_key)
         weights_path = weights_dir / meta["filename"]
-        cached = _is_cached(weights_path, meta["sha256"])
-        label = f"{key} ({'cached' if cached else 'download'})"
-        choices[label] = key
+        choices[key] = key
         meta_map[key] = {
             "release": release_key,
             "filename": meta["filename"],
