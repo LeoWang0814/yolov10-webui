@@ -21,6 +21,7 @@ from ui.train import build_train_tab
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_CFG = default_cfg_dict()
+MAX_LOG_LINES = 400
 
 
 def _load_css() -> str:
@@ -322,10 +323,31 @@ def _strip_ansi(text: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
 
-def _append_log(log: str, message: str) -> str:
+def _trim_log(log: str, max_lines: int = MAX_LOG_LINES) -> str:
+    lines = log.splitlines()
+    if len(lines) <= max_lines:
+        return log
+    kept = lines[-max_lines:]
+    return "\n".join(kept) + "\n"
+
+
+def _append_log(log: str, message: str, max_lines: int = MAX_LOG_LINES) -> str:
     if log and not log.endswith("\n"):
         log += "\n"
-    return f"{log}{message}\n"
+    log = f"{log}{message}\n"
+    return _trim_log(log, max_lines=max_lines)
+
+
+def _append_log_lines(log: str, text: str, max_lines: int = MAX_LOG_LINES) -> str:
+    if not text:
+        return log
+    if log and not log.endswith("\n"):
+        log += "\n"
+    chunk = text.rstrip("\n")
+    log = f"{log}{chunk}\n"
+    return _trim_log(log, max_lines=max_lines)
+
+
 
 
 class _ProgressTracker:
@@ -409,6 +431,41 @@ def main() -> gr.Blocks:
               <h1>YOLOv10 WebUI</h1>
               <div class="subtle">Train and Predict with a fast, reproducible workflow.</div>
             </div>
+            """
+        )
+        gr.HTML(
+            """
+            <script>
+            (function () {
+              const IDS = ["train-log", "train-adv-log", "predict-log", "predict-adv-log"];
+              const POLL_MS = 150;
+              function getTextarea(id) {
+                const root = document.getElementById(id);
+                if (!root) return null;
+                return root.tagName === "TEXTAREA" ? root : root.querySelector("textarea");
+              }
+              const state = new Map();
+              function bottomScroll(ta) {
+                ta.scrollTop = ta.scrollHeight;
+              }
+              function tick() {
+                IDS.forEach((id) => {
+                  const ta = getTextarea(id);
+                  if (!ta) return;
+                  const value = ta.value || "";
+                  const last = state.get(id);
+                  if (!last || last.value !== value) {
+                    state.set(id, { value });
+                    bottomScroll(ta);
+                    setTimeout(() => bottomScroll(ta), 0);
+                    setTimeout(() => bottomScroll(ta), 50);
+                  }
+                });
+              }
+              setInterval(tick, POLL_MS);
+              tick();
+            })();
+            </script>
             """
         )
         status_bar()
@@ -766,14 +823,15 @@ def main() -> gr.Blocks:
                     heartbeat_message="[status] Training running, waiting for output...",
                 ):
                     clean_line = _strip_ansi(line)
-                    log += clean_line
+                    log = _append_log_lines(log, clean_line)
                     yield log, str(run_dir), "", ""
                 best = run_dir / "weights" / "best.pt"
                 last = run_dir / "weights" / "last.pt"
                 yield log, str(run_dir), str(best) if best.exists() else "", str(last) if last.exists() else ""
             except Exception as exc:
                 _log_exception("basic train", exc)
-                yield f"{log}\nError: {exc}", "", "", ""
+                log = _append_log(log, f"Error: {exc}")
+                yield log, "", "", ""
 
         train_ui["start_btn"].click(
             _run_basic_train,
@@ -974,14 +1032,15 @@ def main() -> gr.Blocks:
                     heartbeat_message="[status] Training running, waiting for output...",
                 ):
                     clean_line = _strip_ansi(line)
-                    log += clean_line
+                    log = _append_log_lines(log, clean_line)
                     yield log, str(run_dir), "", ""
                 best = run_dir / "weights" / "best.pt"
                 last = run_dir / "weights" / "last.pt"
                 yield log, str(run_dir), str(best) if best.exists() else "", str(last) if last.exists() else ""
             except Exception as exc:
                 _log_exception("advanced train", exc)
-                yield f"{log}\nError: {exc}", "", "", ""
+                log = _append_log(log, f"Error: {exc}")
+                yield log, "", "", ""
 
         train_ui["adv_start"].click(
             _run_adv_train,
@@ -1158,9 +1217,7 @@ def main() -> gr.Blocks:
                     heartbeat_message="[status] Model running, waiting for output...",
                 ):
                     clean_line = _strip_ansi(line)
-                    if not clean_line.endswith("\n"):
-                        clean_line += "\n"
-                    log += clean_line
+                    log = _append_log_lines(log, clean_line)
                     yield log, [], None, str(run_dir)
                 parsed_dir = _extract_results_dir(log)
                 actual_dir = parsed_dir if parsed_dir else _resolve_actual_run_dir(run_dir)
@@ -1168,7 +1225,8 @@ def main() -> gr.Blocks:
                 yield log, images, video, str(actual_dir.resolve())
             except Exception as exc:
                 _log_exception("basic predict", exc)
-                yield f"{log}\nError: {exc}", [], None, ""
+                log = _append_log(log, f"Error: {exc}")
+                yield log, [], None, ""
 
         predict_ui["start_btn"].click(
             _run_basic_predict,
@@ -1355,9 +1413,7 @@ def main() -> gr.Blocks:
                     heartbeat_message="[status] Model running, waiting for output...",
                 ):
                     clean_line = _strip_ansi(line)
-                    if not clean_line.endswith("\n"):
-                        clean_line += "\n"
-                    log += clean_line
+                    log = _append_log_lines(log, clean_line)
                     yield log, [], None, str(run_dir)
                 parsed_dir = _extract_results_dir(log)
                 actual_dir = parsed_dir if parsed_dir else _resolve_actual_run_dir(run_dir)
@@ -1365,7 +1421,8 @@ def main() -> gr.Blocks:
                 yield log, images, video, str(actual_dir.resolve())
             except Exception as exc:
                 _log_exception("advanced predict", exc)
-                yield f"{log}\nError: {exc}", [], None, ""
+                log = _append_log(log, f"Error: {exc}")
+                yield log, [], None, ""
 
         predict_ui["adv_start"].click(
             _run_adv_predict,
