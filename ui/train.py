@@ -302,42 +302,11 @@ def build_train_tab() -> Dict[str, Any]:
         components["advanced_group"] = advanced_group
 
         with gr.Group(elem_classes=["metrics-panel"]):
-            gr.Markdown("### Logs / Metrics")
             with gr.Row():
-                smooth_toggle = gr.Checkbox(label="Smoothing", value=True)
+                gr.Markdown("### Logs / Metrics")
                 view_range = gr.Number(label="View Range (rows, -1=all)", value=-1, precision=0)
-            metrics_tick = gr.Button(value="Click to refresh charts", visible=True, elem_id="metrics-tick")
-            gr.HTML(
-                """
-                <script>
-                (function() {
-                  if (window.__metricsTickStarted) return;
-                  window.__metricsTickStarted = true;
-                  var findBtn = function() {
-                    var host = document.getElementById('metrics-tick');
-                    if (!host) return null;
-                    if (host.tagName === 'BUTTON') return host;
-                    return host.querySelector('button');
-                  };
-                  var tick = function() {
-                    var btn = findBtn();
-                    if (btn) { btn.click(); }
-                  };
-                  var start = function() {
-                    tick();
-                    setInterval(tick, 1000);
-                  };
-                  if (document.readyState === 'loading') {
-                    document.addEventListener('DOMContentLoaded', start);
-                  } else {
-                    start();
-                  }
-                })();
-                </script>
-                """
-            )
-            kpi_html = gr.HTML(value="<div class='metrics-empty'>No run selected.</div>")
-            diag_html = gr.HTML(value="")
+                metrics_refresh = gr.Button(value="Click to refresh charts", elem_id="metrics-refresh")
+            metrics_timer = gr.Timer(1.0) if hasattr(gr, "Timer") else None
             with gr.Tabs():
                 with gr.Tab("Loss"):
                     loss_plot = gr.Plot()
@@ -352,11 +321,9 @@ def build_train_tab() -> Dict[str, Any]:
             metrics_table = gr.Dataframe(label="Logs", interactive=False, wrap=True)
             components.update(
                 {
-                    "smooth_toggle": smooth_toggle,
                     "view_range": view_range,
-                    "metrics_tick": metrics_tick,
-                    "kpi_html": kpi_html,
-                    "diag_html": diag_html,
+                    "metrics_refresh": metrics_refresh,
+                    "metrics_timer": metrics_timer,
                     "loss_plot": loss_plot,
                     "metric_plot": metric_plot,
                     "lr_plot": lr_plot,

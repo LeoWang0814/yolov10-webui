@@ -1095,7 +1095,6 @@ def main() -> gr.Blocks:
             adv_output_dir,
             log_text,
             adv_log_text,
-            smooth_toggle,
             view_range,
             table_filter,
             state,
@@ -1120,8 +1119,6 @@ def main() -> gr.Blocks:
                 )
                 empty_fig = _empty_plot("Select or start a run")
                 return (
-                    "<div class='metrics-empty'>No run selected.</div>",
-                    "",
                     empty_fig,
                     empty_fig,
                     empty_fig,
@@ -1137,8 +1134,6 @@ def main() -> gr.Blocks:
                 )
                 empty_fig = _empty_plot("Waiting for results.csv...")
                 return (
-                    "<div class='metrics-empty'>Waiting for results.csv...</div>",
-                    "",
                     empty_fig,
                     empty_fig,
                     empty_fig,
@@ -1158,8 +1153,6 @@ def main() -> gr.Blocks:
                 traceback.print_exc()
                 empty_fig = _empty_plot("Waiting for results.csv...")
                 return (
-                    "<div class='metrics-empty'>Waiting for results.csv...</div>",
-                    "",
                     empty_fig,
                     empty_fig,
                     empty_fig,
@@ -1172,8 +1165,6 @@ def main() -> gr.Blocks:
                 _debug_metrics(f"results_empty path={str(csv_path)} size={file_size}")
                 empty_fig = _empty_plot("Waiting for results.csv...")
                 return (
-                    "<div class='metrics-empty'>Waiting for results.csv...</div>",
-                    "",
                     empty_fig,
                     empty_fig,
                     empty_fig,
@@ -1181,6 +1172,16 @@ def main() -> gr.Blocks:
                     state,
                     str(resolved),
                 )
+            if state.get("last_rows") == len(df):
+                return (
+                    gr.update(),
+                    gr.update(),
+                    gr.update(),
+                    gr.update(),
+                    state,
+                    run_state,
+                )
+            state["last_rows"] = len(df)
             cols_signature = tuple(df.columns)
             rows_count = len(df)
             if state.get("debug_rows") != rows_count or state.get("debug_cols") != cols_signature:
@@ -1217,7 +1218,7 @@ def main() -> gr.Blocks:
                 "lr/pg2",
             ]
             smooth_cols = [c for c in all_cols if _find_col(df_view, c)]
-            df_smooth = _apply_smoothing(df_view, smooth_cols, 5, bool(smooth_toggle))
+            df_smooth = _apply_smoothing(df_view, smooth_cols, 5, True)
 
             loss_series = []
             loss_groups = [
@@ -1279,8 +1280,6 @@ def main() -> gr.Blocks:
                 table_update = table_df
 
             return (
-                _render_kpis(df),
-                _render_diag(df),
                 loss_fig,
                 metric_fig,
                 lr_fig,
@@ -1304,14 +1303,11 @@ def main() -> gr.Blocks:
                 train_ui["adv_output_dir"],
                 train_ui["log_box"],
                 train_ui["adv_log"],
-                train_ui["smooth_toggle"],
                 train_ui["view_range"],
                 train_ui["table_filter"],
                 train_metrics_state,
             ],
             outputs=[
-                train_ui["kpi_html"],
-                train_ui["diag_html"],
                 train_ui["loss_plot"],
                 train_ui["metric_plot"],
                 train_ui["lr_plot"],
@@ -1322,7 +1318,7 @@ def main() -> gr.Blocks:
             **load_kwargs,
         )
 
-        train_ui["metrics_tick"].click(
+        train_ui["metrics_refresh"].click(
             _update_metrics,
             inputs=[
                 train_run_state,
@@ -1330,14 +1326,11 @@ def main() -> gr.Blocks:
                 train_ui["adv_output_dir"],
                 train_ui["log_box"],
                 train_ui["adv_log"],
-                train_ui["smooth_toggle"],
                 train_ui["view_range"],
                 train_ui["table_filter"],
                 train_metrics_state,
             ],
             outputs=[
-                train_ui["kpi_html"],
-                train_ui["diag_html"],
                 train_ui["loss_plot"],
                 train_ui["metric_plot"],
                 train_ui["lr_plot"],
@@ -1347,6 +1340,31 @@ def main() -> gr.Blocks:
             ],
             queue=False,
         )
+
+        metrics_timer = train_ui.get("metrics_timer")
+        if metrics_timer is not None and hasattr(metrics_timer, "tick"):
+            metrics_timer.tick(
+                _update_metrics,
+                inputs=[
+                    train_run_state,
+                    train_ui["output_dir"],
+                    train_ui["adv_output_dir"],
+                    train_ui["log_box"],
+                    train_ui["adv_log"],
+                    train_ui["view_range"],
+                    train_ui["table_filter"],
+                    train_metrics_state,
+                ],
+                outputs=[
+                    train_ui["loss_plot"],
+                    train_ui["metric_plot"],
+                    train_ui["lr_plot"],
+                    train_ui["metrics_table"],
+                    train_metrics_state,
+                    train_run_state,
+                ],
+                queue=False,
+            )
 
         def _refresh_dropdowns(train_value=None, adv_train_value=None, pred_value=None, adv_pred_value=None):
             global MODEL_CHOICES, MODEL_META
