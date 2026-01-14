@@ -771,7 +771,7 @@ def _render_data_status(path: str) -> str:
     if not cards:
         return "<div class='metrics-empty'>No dataset splits found in YAML.</div>"
 
-    return f"<div class='metrics-grid'>{''.join(cards)}</div>"
+    return f"<div class='dataset-cards' style='display:flex;flex-direction:column;gap:10px;'>{''.join(cards)}</div>"
 
 
 def _list_train_runs() -> List[str]:
@@ -884,7 +884,17 @@ def _plot_series(df: pd.DataFrame, x_col: str, series: List[Tuple[str, str]]) ->
     x = df[x_col] if x_col in df.columns else pd.Series(range(len(df)))
     x = pd.to_numeric(x, errors="coerce")
     has_trace = False
-    alphas = [0.9, 0.7, 0.55, 0.4]
+    palette = [
+        "#4C78A8",
+        "#F58518",
+        "#54A24B",
+        "#E45756",
+        "#72B7B2",
+        "#B279A2",
+        "#FF9DA6",
+        "#9D755D",
+        "#BAB0AC",
+    ]
 
     for idx, (col, label) in enumerate(series):
         if col not in df.columns:
@@ -892,8 +902,7 @@ def _plot_series(df: pd.DataFrame, x_col: str, series: List[Tuple[str, str]]) ->
         y = pd.to_numeric(df[col], errors="coerce")
         if y.notna().sum() == 0:
             continue
-        alpha = alphas[min(idx, len(alphas) - 1)]
-        color = f"rgba(122,162,247,{alpha})"
+        color = palette[idx % len(palette)]
         fig.add_trace(
             go.Scatter(
                 x=x,
@@ -901,7 +910,7 @@ def _plot_series(df: pd.DataFrame, x_col: str, series: List[Tuple[str, str]]) ->
                 mode="lines",
                 name=label,
                 line=dict(color=color, width=2, shape="spline", smoothing=0.6),
-                hovertemplate="epoch=%{x}<br>%{y:.4f}<extra></extra>",
+                hovertemplate="<b>%{fullData.name}</b><br>%{y:.4f}<extra></extra>",
             )
         )
         has_trace = True
@@ -924,8 +933,10 @@ def _plot_series(df: pd.DataFrame, x_col: str, series: List[Tuple[str, str]]) ->
         margin=dict(l=32, r=20, t=32, b=28),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0, font=dict(size=11)),
         hovermode="x unified",
+        hoverlabel=dict(namelength=-1),
         xaxis=dict(
             title="epoch",
+            hoverformat="EPOCH=%d",
             showgrid=True,
             gridcolor="rgba(42,51,66,0.28)",
             zeroline=False,
@@ -1711,6 +1722,8 @@ def main() -> gr.Blocks:
                 total_epochs = int(epochs)
             except (TypeError, ValueError):
                 total_epochs = None
+            best_display = ""
+            last_display = ""
             status_html = _render_train_status("Idle", data_path, None, total_epochs)
             status_stage = "Idle"
             run_dir = _run_dir_path("train", run_name, create=False)
@@ -1779,8 +1792,8 @@ def main() -> gr.Blocks:
                 update = _emit_update(
                     status_html,
                     run_dir_str,
-                    "",
-                    "",
+                    best_display,
+                    last_display,
                     gr.update(visible=False),
                     "",
                     run_dir_abs,
@@ -1813,8 +1826,8 @@ def main() -> gr.Blocks:
                     update = _emit_update(
                         status_html,
                         "",
-                        "",
-                        "",
+                        best_display,
+                        last_display,
                         conflict_group,
                         conflict_message,
                         "",
@@ -1840,8 +1853,8 @@ def main() -> gr.Blocks:
                     update = _emit_update(
                         status_html,
                         run_dir_str,
-                        "",
-                        "",
+                        best_display,
+                        last_display,
                         gr.update(visible=False),
                         "",
                         run_dir_abs,
@@ -1880,8 +1893,8 @@ def main() -> gr.Blocks:
                             update = _emit_update(
                                 status_html,
                                 run_dir_str,
-                                "",
-                                "",
+                                best_display,
+                                last_display,
                                 gr.update(visible=False),
                                 "",
                                 run_dir_abs,
@@ -1901,8 +1914,8 @@ def main() -> gr.Blocks:
                         update = _emit_update(
                             status_html,
                             run_dir_str,
-                            "",
-                            "",
+                            best_display,
+                            last_display,
                             gr.update(visible=False),
                             "",
                             run_dir_abs,
@@ -1933,8 +1946,8 @@ def main() -> gr.Blocks:
                     update = _emit_update(
                         status_html,
                         run_dir_str,
-                        "",
-                        "",
+                        best_display,
+                        last_display,
                         gr.update(visible=False),
                         "",
                         run_dir_abs,
@@ -1961,8 +1974,8 @@ def main() -> gr.Blocks:
                     update = _emit_update(
                         status_html,
                         run_dir_str,
-                        "",
-                        "",
+                        best_display,
+                        last_display,
                         gr.update(visible=False),
                         "",
                         run_dir_abs,
@@ -1981,8 +1994,8 @@ def main() -> gr.Blocks:
                 update = _emit_update(
                     status_html,
                     run_dir_str,
-                    "",
-                    "",
+                    best_display,
+                    last_display,
                     gr.update(visible=False),
                     "",
                     run_dir_abs,
@@ -2012,6 +2025,9 @@ def main() -> gr.Blocks:
                     if not results_csv_logged and results_csv_path.exists():
                         global LAST_RESULTS_CSV
                         LAST_RESULTS_CSV = str(results_csv_path)
+                        weights_dir = results_csv_path.parent / "weights"
+                        best_display = str((weights_dir / "best.pt").resolve())
+                        last_display = str((weights_dir / "last.pt").resolve())
                         if ENABLE_DEBUG_MSG:
                             print(
                                 f"[train-debug] results_csv_found={results_csv_path}",
@@ -2023,8 +2039,8 @@ def main() -> gr.Blocks:
                     update = _emit_update(
                         status_html,
                         run_dir_str,
-                        "",
-                        "",
+                        best_display,
+                        last_display,
                         gr.update(visible=False),
                         "",
                         run_dir_abs,
@@ -2038,8 +2054,8 @@ def main() -> gr.Blocks:
                 update = _emit_update(
                     status_html,
                     run_dir_str,
-                    str(best) if best.exists() else "",
-                    str(last) if last.exists() else "",
+                    best_display,
+                    last_display,
                     gr.update(visible=False),
                     "",
                     run_dir_abs,
@@ -2057,8 +2073,8 @@ def main() -> gr.Blocks:
                 update = _emit_update(
                     status_html,
                     "",
-                    "",
-                    "",
+                    best_display,
+                    last_display,
                     gr.update(visible=False),
                     "",
                     "",
@@ -2147,12 +2163,6 @@ def main() -> gr.Blocks:
                 return gr.update(value=""), gr.update(value="Local .pt")
             return gr.update(value=path), gr.update(value="Local .pt")
 
-        train_ui["set_predict_btn"].click(
-            _set_predict_model,
-            inputs=[train_ui["best_path"], train_ui["last_path"]],
-            outputs=[predict_ui["local_model"], predict_ui["model_source"]],
-        )
-
         def _advanced_train_args(
             adv_data_path,
             adv_model_source,
@@ -2236,6 +2246,8 @@ def main() -> gr.Blocks:
             progress=gr.Progress(),
         ):
             total_epochs = None
+            best_display = ""
+            last_display = ""
             status_html = _render_train_status("Idle", adv_data_path, None, total_epochs)
             status_stage = "Idle"
             run_dir = _run_dir_path("train", run_name, create=False)
@@ -2308,8 +2320,8 @@ def main() -> gr.Blocks:
                 update = _emit_update(
                     status_html,
                     run_dir_str,
-                    "",
-                    "",
+                    best_display,
+                    last_display,
                     gr.update(visible=False),
                     "",
                     run_dir_abs,
@@ -2328,8 +2340,8 @@ def main() -> gr.Blocks:
                     update = _emit_update(
                         status_html,
                         "",
-                        "",
-                        "",
+                        best_display,
+                        last_display,
                         conflict_group,
                         conflict_message,
                         "",
@@ -2354,8 +2366,8 @@ def main() -> gr.Blocks:
                     update = _emit_update(
                         status_html,
                         run_dir_str,
-                        "",
-                        "",
+                        best_display,
+                        last_display,
                         gr.update(visible=False),
                         "",
                         run_dir_abs,
@@ -2394,8 +2406,8 @@ def main() -> gr.Blocks:
                             update = _emit_update(
                                 status_html,
                                 run_dir_str,
-                                "",
-                                "",
+                                best_display,
+                                last_display,
                                 gr.update(visible=False),
                                 "",
                                 run_dir_abs,
@@ -2415,8 +2427,8 @@ def main() -> gr.Blocks:
                         update = _emit_update(
                             status_html,
                             run_dir_str,
-                            "",
-                            "",
+                            best_display,
+                            last_display,
                             gr.update(visible=False),
                             "",
                             run_dir_abs,
@@ -2447,8 +2459,8 @@ def main() -> gr.Blocks:
                     update = _emit_update(
                         status_html,
                         run_dir_str,
-                        "",
-                        "",
+                        best_display,
+                        last_display,
                         gr.update(visible=False),
                         "",
                         run_dir_abs,
@@ -2475,8 +2487,8 @@ def main() -> gr.Blocks:
                     update = _emit_update(
                         status_html,
                         run_dir_str,
-                        "",
-                        "",
+                        best_display,
+                        last_display,
                         gr.update(visible=False),
                         "",
                         run_dir_abs,
@@ -2500,8 +2512,8 @@ def main() -> gr.Blocks:
                 update = _emit_update(
                     status_html,
                     run_dir_str,
-                    "",
-                    "",
+                    best_display,
+                    last_display,
                     gr.update(visible=False),
                     "",
                     run_dir_abs,
@@ -2531,6 +2543,9 @@ def main() -> gr.Blocks:
                     if not results_csv_logged and results_csv_path.exists():
                         global LAST_RESULTS_CSV
                         LAST_RESULTS_CSV = str(results_csv_path)
+                        weights_dir = results_csv_path.parent / "weights"
+                        best_display = str((weights_dir / "best.pt").resolve())
+                        last_display = str((weights_dir / "last.pt").resolve())
                         if ENABLE_DEBUG_MSG:
                             print(
                                 f"[train-debug] results_csv_found={results_csv_path}",
@@ -2542,8 +2557,8 @@ def main() -> gr.Blocks:
                     update = _emit_update(
                         status_html,
                         run_dir_str,
-                        "",
-                        "",
+                        best_display,
+                        last_display,
                         gr.update(visible=False),
                         "",
                         run_dir_abs,
@@ -2557,8 +2572,8 @@ def main() -> gr.Blocks:
                 update = _emit_update(
                     status_html,
                     run_dir_str,
-                    str(best) if best.exists() else "",
-                    str(last) if last.exists() else "",
+                    best_display,
+                    last_display,
                     gr.update(visible=False),
                     "",
                     run_dir_abs,
@@ -2576,8 +2591,8 @@ def main() -> gr.Blocks:
                 update = _emit_update(
                     status_html,
                     "",
-                    "",
-                    "",
+                    best_display,
+                    last_display,
                     gr.update(visible=False),
                     "",
                     "",
@@ -2615,12 +2630,6 @@ def main() -> gr.Blocks:
             outputs=train_ui["adv_log"],
             cancels=[adv_train_event],
         )
-        train_ui["adv_set_predict_btn"].click(
-            _set_predict_model,
-            inputs=[train_ui["adv_best_path"], train_ui["adv_last_path"]],
-            outputs=[predict_ui["local_model"], predict_ui["model_source"]],
-        )
-
         def _basic_predict_args(
             model_source,
             pretrained_model,

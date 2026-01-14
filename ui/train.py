@@ -35,10 +35,12 @@ def build_train_tab() -> Dict[str, Any]:
     components: Dict[str, Any] = {}
     with gr.Tab("Train"):
         with gr.Group() as basic_group:
-            with gr.Row():
-                data_path = gr.Textbox(label="Dataset YAML Path (data)", placeholder="datasets/coco8.yaml")
-                validate_btn = gr.Button("Validate Data")
-                data_status = gr.HTML(label="Data Status")
+            with gr.Row(elem_classes=["train-dataset-row"]):
+                with gr.Column(scale=4):
+                    data_path = gr.Textbox(label="Dataset YAML Path (data)", placeholder="datasets/coco8.yaml")
+                with gr.Column(scale=1):
+                    validate_btn = gr.Button("Validate Data")
+            data_status = gr.HTML(label="Data Status")
             components.update(
                 {
                     "data_path": data_path,
@@ -176,9 +178,8 @@ def build_train_tab() -> Dict[str, Any]:
                 start_btn = gr.Button("Start Training", elem_classes=["accent-btn"])
                 stop_btn = gr.Button("Stop", elem_classes=["secondary-btn"])
             log_box = gr.HTML(label="Training Status")
-            best_path = gr.Textbox(label="best.pt", interactive=False)
-            last_path = gr.Textbox(label="last.pt", interactive=False)
-            set_predict_btn = gr.Button("Set as Predict Model")
+            best_path = gr.Textbox(label="best.pt", value="", interactive=False)
+            last_path = gr.Textbox(label="last.pt", value="", interactive=False)
             components.update(
                 {
                     "start_btn": start_btn,
@@ -186,7 +187,6 @@ def build_train_tab() -> Dict[str, Any]:
                     "log_box": log_box,
                     "best_path": best_path,
                     "last_path": last_path,
-                    "set_predict_btn": set_predict_btn,
                 }
             )
 
@@ -271,9 +271,8 @@ def build_train_tab() -> Dict[str, Any]:
             adv_start = gr.Button("Start Training (Advanced)", elem_classes=["accent-btn"])
             adv_stop = gr.Button("Stop", elem_classes=["secondary-btn"])
             adv_output_dir = gr.Textbox(label="Output Directory", interactive=False)
-            adv_best_path = gr.Textbox(label="best.pt", interactive=False)
-            adv_last_path = gr.Textbox(label="last.pt", interactive=False)
-            adv_set_predict_btn = gr.Button("Set as Predict Model")
+            adv_best_path = gr.Textbox(label="best.pt", value="", interactive=False)
+            adv_last_path = gr.Textbox(label="last.pt", value="", interactive=False)
             cli_preview_adv = gr.Textbox(label="CLI Preview", interactive=False)
             components.update(
                 {
@@ -283,7 +282,6 @@ def build_train_tab() -> Dict[str, Any]:
                     "adv_output_dir": adv_output_dir,
                     "adv_best_path": adv_best_path,
                     "adv_last_path": adv_last_path,
-                    "adv_set_predict_btn": adv_set_predict_btn,
                     "cli_preview_adv": cli_preview_adv,
                 }
             )

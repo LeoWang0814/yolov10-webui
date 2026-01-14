@@ -266,6 +266,14 @@ h3 {
   gap: 22px;
 }
 
+.train-dataset-row {
+  align-items: stretch;
+}
+
+.train-dataset-row .gr-button {
+  height: 100%;
+}
+
 .gradio-container label {
   margin-bottom: 8px;
 }
@@ -493,6 +501,12 @@ h3 {
   border: 1px solid var(--border);
   background: var(--panel);
   padding: 8px;
+  width: 100% !important;
+}
+
+.metrics-panel .plotly-graph-div .plot-container,
+.metrics-panel .plotly-graph-div .svg-container {
+  width: 100% !important;
 }
 
 .metrics-panel .tabitem {
@@ -523,7 +537,7 @@ h3 {
 .metrics-panel .dataframe table tbody tr,
 .metrics-panel .dataframe table tbody tr:nth-child(even),
 .metrics-panel .dataframe table tbody tr:nth-child(odd) {
-  background: transparent !important;
+  background: var(--panel-2) !important;
   transition: none !important;
 }
 
