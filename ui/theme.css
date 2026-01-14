@@ -562,6 +562,10 @@ h3 {
 
 /* metrics-tick button is intentionally visible */
 
+.metrics-charts .gr-plot {
+  width: 100%;
+}
+
 .kpi-card {
   background: var(--panel-2);
   border: 1px solid var(--border);

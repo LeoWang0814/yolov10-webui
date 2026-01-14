@@ -307,13 +307,13 @@ def build_train_tab() -> Dict[str, Any]:
                 view_range = gr.Number(label="View Range (rows, -1=all)", value=-1, precision=0)
                 metrics_refresh = gr.Button(value="Click to refresh charts", elem_id="metrics-refresh")
             metrics_timer = gr.Timer(1.0) if hasattr(gr, "Timer") else None
-            with gr.Tabs():
-                with gr.Tab("Loss"):
-                    loss_plot = gr.Plot()
-                with gr.Tab("Metrics"):
-                    metric_plot = gr.Plot()
-                with gr.Tab("LR"):
-                    lr_plot = gr.Plot()
+            with gr.Column(elem_classes=["metrics-charts"]):
+                gr.Markdown("#### Metrics")
+                metric_plot = gr.Plot()
+                gr.Markdown("#### Loss")
+                loss_plot = gr.Plot()
+                gr.Markdown("#### LR")
+                lr_plot = gr.Plot()
             table_filter = gr.State(value="")
             metrics_table = gr.Dataframe(label="Logs", interactive=False, wrap=True)
             components.update(
