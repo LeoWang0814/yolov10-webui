@@ -36,10 +36,12 @@ def build_train_tab() -> Dict[str, Any]:
     with gr.Tab("Train"):
         with gr.Group() as basic_group:
             with gr.Row(elem_classes=["train-dataset-row"]):
-                with gr.Column(scale=4):
-                    data_path = gr.Textbox(label="Dataset YAML Path (data)", placeholder="datasets/coco8.yaml")
-                with gr.Column(scale=1):
-                    validate_btn = gr.Button("Validate Data")
+                data_path = gr.Textbox(
+                    label="Dataset YAML Path (data)",
+                    placeholder="datasets/coco8.yaml",
+                    scale=4,
+                )
+                validate_btn = gr.Button("Validate Data", scale=1)
             data_status = gr.HTML(label="Data Status")
             components.update(
                 {
