@@ -443,6 +443,30 @@ def _append_log_lines(log: str, text: str, max_lines: int = MAX_LOG_LINES) -> st
     return _trim_log(log, max_lines=max_lines)
 
 
+def _latest_log_line(current: str, text: str) -> str:
+    if not text:
+        return current or ""
+    tokens = re.split(r"(\r|\n)", text)
+    line_buf = current or ""
+    overwrite_pending = False
+    for token in tokens:
+        if not token:
+            continue
+        if token == "\r":
+            line_buf = ""
+            overwrite_pending = True
+            continue
+        if token == "\n":
+            line_buf = ""
+            overwrite_pending = False
+            continue
+        if overwrite_pending:
+            line_buf = token
+            overwrite_pending = False
+        else:
+            line_buf += token
+    return line_buf
+
 
 
 class _ProgressTracker:
@@ -1588,37 +1612,150 @@ def main() -> gr.Blocks:
         for comp in basic_train_inputs:
             comp.change(_update_basic_train_cli, inputs=basic_train_inputs, outputs=train_ui["cli_preview_basic"])
 
-        def _run_basic_train(*inputs, progress=gr.Progress()):
-            log = ""
-            run_dir = _run_dir_path("train", inputs[-1], create=False)
+        def _run_basic_train(
+            data_path,
+            model_source,
+            pretrained_model,
+            local_model,
+            epochs,
+            imgsz,
+            batch,
+            device_mode,
+            single_gpu,
+            multi_gpu,
+            workers,
+            run_name,
+            view_range,
+            table_filter,
+            metrics_state,
+            progress=gr.Progress(),
+        ):
+            log_line = ""
+            run_dir = _run_dir_path("train", run_name, create=False)
             run_dir_str = str(run_dir)
             run_dir_abs = str(_resolve_local_path(run_dir_str))
             try:
                 global LAST_TRAIN_RUN_DIR
                 LAST_TRAIN_RUN_DIR = run_dir_abs
-                log = _append_log(log, "[status] Resolving model...")
-                yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
-                args = _basic_train_args(*inputs, create_run_dir=False)
+                metrics_state = metrics_state or {}
+
+                def _emit_update(
+                    log_line_value,
+                    output_dir_value,
+                    best_path_value,
+                    last_path_value,
+                    conflict_group_value,
+                    conflict_message_value,
+                    run_state_value,
+                    metrics_state_value,
+                ):
+                    (
+                        loss_fig,
+                        metric_fig,
+                        lr_fig,
+                        table_update,
+                        metrics_state_value,
+                        run_state_value,
+                    ) = _update_metrics(
+                        run_state_value,
+                        output_dir_value,
+                        "",
+                        log_line_value,
+                        "",
+                        view_range,
+                        table_filter,
+                        metrics_state_value,
+                    )
+                    return (
+                        log_line_value,
+                        output_dir_value,
+                        best_path_value,
+                        last_path_value,
+                        conflict_group_value,
+                        conflict_message_value,
+                        run_state_value,
+                        loss_fig,
+                        metric_fig,
+                        lr_fig,
+                        table_update,
+                        metrics_state_value,
+                    )
+
+                log_line = "[status] Resolving model..."
+                print(log_line, flush=True)
+                update = _emit_update(
+                    log_line,
+                    run_dir_str,
+                    "",
+                    "",
+                    gr.update(visible=False),
+                    "",
+                    run_dir_abs,
+                    metrics_state,
+                )
+                metrics_state = update[-1]
+                run_dir_abs = update[6]
+                yield update
+                args = _basic_train_args(
+                    data_path,
+                    model_source,
+                    pretrained_model,
+                    local_model,
+                    epochs,
+                    imgsz,
+                    batch,
+                    device_mode,
+                    single_gpu,
+                    multi_gpu,
+                    workers,
+                    run_name,
+                    create_run_dir=False,
+                )
                 run_dir = Path(args["project"]) / args["name"]
                 run_dir_str = str(run_dir)
                 run_dir_abs = str(_resolve_local_path(run_dir_str))
                 LAST_TRAIN_RUN_DIR = run_dir_abs
                 if _run_dir_has_content(run_dir):
                     conflict_group, conflict_message = _show_conflict(run_dir)
-                    yield log, "", "", "", conflict_group, conflict_message, ""
+                    update = _emit_update(
+                        log_line,
+                        "",
+                        "",
+                        "",
+                        conflict_group,
+                        conflict_message,
+                        "",
+                        metrics_state,
+                    )
+                    metrics_state = update[-1]
+                    run_dir_abs = update[6]
+                    yield update
                     return
                 run_dir.mkdir(parents=True, exist_ok=True)
                 expected_path, existed, mtime_before = (None, False, None)
-                if inputs[1] == "Pretrained":
-                    expected_path, existed, mtime_before = _model_cache_state(inputs[2])
+                if model_source == "Pretrained":
+                    expected_path, existed, mtime_before = _model_cache_state(pretrained_model)
                 if expected_path:
                     if existed:
-                        log = _append_log(log, "[status] Found cached model file, verifying checksum...")
+                        log_line = "[status] Found cached model file, verifying checksum..."
                     else:
-                        log = _append_log(log, "[status] Downloading model from GitHub release...")
-                    yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
+                        log_line = "[status] Downloading model from GitHub release..."
+                    print(log_line, flush=True)
+                    update = _emit_update(
+                        log_line,
+                        run_dir_str,
+                        "",
+                        "",
+                        gr.update(visible=False),
+                        "",
+                        run_dir_abs,
+                        metrics_state,
+                    )
+                    metrics_state = update[-1]
+                    run_dir_abs = update[6]
+                    yield update
                 start_time = time.time()
-                if inputs[1] == "Pretrained":
+                if model_source == "Pretrained":
                     tracker = _ProgressTracker(progress)
                     result: Dict[str, Path] = {}
                     error: Dict[str, Exception] = {}
@@ -1626,9 +1763,9 @@ def main() -> gr.Blocks:
                     def worker():
                         try:
                             result["path"] = _resolve_model_path(
-                                inputs[1],
-                                inputs[2],
-                                inputs[3],
+                                model_source,
+                                pretrained_model,
+                                local_model,
                                 progress=tracker,
                                 allow_download=True,
                             )
@@ -1640,22 +1777,48 @@ def main() -> gr.Blocks:
                     while thread.is_alive():
                         msg = tracker.consume()
                         if msg:
-                            log = _append_log(log, f"[download] {msg}")
-                            yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
+                            log_line = f"[download] {msg}"
+                            print(log_line, flush=True)
+                            update = _emit_update(
+                                log_line,
+                                run_dir_str,
+                                "",
+                                "",
+                                gr.update(visible=False),
+                                "",
+                                run_dir_abs,
+                                metrics_state,
+                            )
+                            metrics_state = update[-1]
+                            run_dir_abs = update[6]
+                            yield update
                         time.sleep(0.2)
                     thread.join()
                     msg = tracker.flush()
                     if msg:
-                        log = _append_log(log, f"[download] {msg}")
-                        yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
+                        log_line = f"[download] {msg}"
+                        print(log_line, flush=True)
+                        update = _emit_update(
+                            log_line,
+                            run_dir_str,
+                            "",
+                            "",
+                            gr.update(visible=False),
+                            "",
+                            run_dir_abs,
+                            metrics_state,
+                        )
+                        metrics_state = update[-1]
+                        run_dir_abs = update[6]
+                        yield update
                     if error.get("exc"):
                         raise error["exc"]
                     model_path = result["path"]
                 else:
                     model_path = _resolve_model_path(
-                        inputs[1],
-                        inputs[2],
-                        inputs[3],
+                        model_source,
+                        pretrained_model,
+                        local_model,
                         progress=progress,
                         allow_download=True,
                     )
@@ -1663,28 +1826,64 @@ def main() -> gr.Blocks:
                 if expected_path and not existed:
                     size_bytes = model_path.stat().st_size if model_path.exists() else 0
                     speed = _format_speed_mb(size_bytes, elapsed)
-                    log = _append_log(
-                        log,
-                        f"[status] Download complete: {_format_size_mb(size_bytes)} in {elapsed:.1f}s ({speed}).",
+                    log_line = f"[status] Download complete: {_format_size_mb(size_bytes)} in {elapsed:.1f}s ({speed})."
+                    print(log_line, flush=True)
+                    update = _emit_update(
+                        log_line,
+                        run_dir_str,
+                        "",
+                        "",
+                        gr.update(visible=False),
+                        "",
+                        run_dir_abs,
+                        metrics_state,
                     )
-                    yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
+                    metrics_state = update[-1]
+                    run_dir_abs = update[6]
+                    yield update
                 elif expected_path and existed:
                     mtime_after = model_path.stat().st_mtime if model_path.exists() else None
                     if mtime_before and mtime_after and mtime_after > mtime_before:
                         size_bytes = model_path.stat().st_size if model_path.exists() else 0
                         speed = _format_speed_mb(size_bytes, elapsed)
-                        log = _append_log(
-                            log,
-                            f"[status] Model updated after checksum check: {_format_size_mb(size_bytes)} in {elapsed:.1f}s ({speed}).",
+                        log_line = (
+                            f"[status] Model updated after checksum check: {_format_size_mb(size_bytes)} "
+                            f"in {elapsed:.1f}s ({speed})."
                         )
                     else:
-                        log = _append_log(log, "[status] Model cached, skip download.")
-                    yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
+                        log_line = "[status] Model cached, skip download."
+                    print(log_line, flush=True)
+                    update = _emit_update(
+                        log_line,
+                        run_dir_str,
+                        "",
+                        "",
+                        gr.update(visible=False),
+                        "",
+                        run_dir_abs,
+                        metrics_state,
+                    )
+                    metrics_state = update[-1]
+                    run_dir_abs = update[6]
+                    yield update
                 args["model"] = str(model_path)
                 cmd, preview = build_command("detect", "train", args)
                 write_run_metadata(run_dir, args, preview)
-                log = _append_log(log, "[status] Launching process...")
-                yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
+                log_line = "[status] Launching process..."
+                print(log_line, flush=True)
+                update = _emit_update(
+                    log_line,
+                    run_dir_str,
+                    "",
+                    "",
+                    gr.update(visible=False),
+                    "",
+                    run_dir_abs,
+                    metrics_state,
+                )
+                metrics_state = update[-1]
+                run_dir_abs = update[6]
+                yield update
                 process = start_process(cmd)
                 print(f"[train-debug] run_dir={run_dir_str}", file=sys.stderr, flush=True)
                 print(
@@ -1711,27 +1910,62 @@ def main() -> gr.Blocks:
                             flush=True,
                         )
                         results_csv_logged = True
-                    log = _append_log_raw(log, _strip_ansi(line))
-                    yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
+                    clean_line = _strip_ansi(line)
+                    log_line = _latest_log_line(log_line, clean_line)
+                    print(line, end="" if line.endswith("\n") else "\n", flush=True)
+                    update = _emit_update(
+                        log_line,
+                        run_dir_str,
+                        "",
+                        "",
+                        gr.update(visible=False),
+                        "",
+                        run_dir_abs,
+                        metrics_state,
+                    )
+                    metrics_state = update[-1]
+                    run_dir_abs = update[6]
+                    yield update
                 best = run_dir / "weights" / "best.pt"
                 last = run_dir / "weights" / "last.pt"
-                yield (
-                    log,
+                update = _emit_update(
+                    log_line,
                     run_dir_str,
                     str(best) if best.exists() else "",
                     str(last) if last.exists() else "",
                     gr.update(visible=False),
                     "",
                     run_dir_abs,
+                    metrics_state,
                 )
+                metrics_state = update[-1]
+                run_dir_abs = update[6]
+                yield update
             except Exception as exc:
                 _log_exception("basic train", exc)
-                log = _append_log(log, f"Error: {exc}")
-                yield log, "", "", "", gr.update(visible=False), "", ""
+                log_line = f"Error: {exc}"
+                print(log_line, flush=True)
+                update = _emit_update(
+                    log_line,
+                    "",
+                    "",
+                    "",
+                    gr.update(visible=False),
+                    "",
+                    "",
+                    metrics_state,
+                )
+                yield update
+
+        basic_train_start_inputs = basic_train_inputs + [
+            train_ui["view_range"],
+            train_ui["table_filter"],
+            train_metrics_state,
+        ]
 
         basic_train_event = train_ui["start_btn"].click(
             _run_basic_train,
-            inputs=basic_train_inputs,
+            inputs=basic_train_start_inputs,
             outputs=[
                 train_ui["log_box"],
                 train_ui["output_dir"],
@@ -1740,6 +1974,11 @@ def main() -> gr.Blocks:
                 train_ui["basic_conflict_group"],
                 train_ui["basic_conflict_message"],
                 train_run_state,
+                train_ui["loss_plot"],
+                train_ui["metric_plot"],
+                train_ui["lr_plot"],
+                train_ui["metrics_table"],
+                train_metrics_state,
             ],
         )
 
@@ -1883,15 +2122,76 @@ def main() -> gr.Blocks:
             *adv_values,
             progress=gr.Progress(),
         ):
-            log = ""
+            log_line = ""
             run_dir = _run_dir_path("train", run_name, create=False)
             run_dir_str = str(run_dir)
             run_dir_abs = str(_resolve_local_path(run_dir_str))
             try:
+                if len(adv_values) < 3:
+                    raise ValueError("Missing view/table inputs for training.")
+                view_range, table_filter, metrics_state = adv_values[-3], adv_values[-2], adv_values[-1]
+                adv_values = adv_values[:-3]
                 global LAST_TRAIN_RUN_DIR
                 LAST_TRAIN_RUN_DIR = run_dir_abs
-                log = _append_log(log, "[status] Resolving model...")
-                yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
+                metrics_state = metrics_state or {}
+
+                def _emit_update(
+                    log_line_value,
+                    adv_output_dir_value,
+                    best_path_value,
+                    last_path_value,
+                    conflict_group_value,
+                    conflict_message_value,
+                    run_state_value,
+                    metrics_state_value,
+                ):
+                    (
+                        loss_fig,
+                        metric_fig,
+                        lr_fig,
+                        table_update,
+                        metrics_state_value,
+                        run_state_value,
+                    ) = _update_metrics(
+                        run_state_value,
+                        "",
+                        adv_output_dir_value,
+                        "",
+                        log_line_value,
+                        view_range,
+                        table_filter,
+                        metrics_state_value,
+                    )
+                    return (
+                        log_line_value,
+                        adv_output_dir_value,
+                        best_path_value,
+                        last_path_value,
+                        conflict_group_value,
+                        conflict_message_value,
+                        run_state_value,
+                        loss_fig,
+                        metric_fig,
+                        lr_fig,
+                        table_update,
+                        metrics_state_value,
+                    )
+
+                log_line = "[status] Resolving model..."
+                print(log_line, flush=True)
+                update = _emit_update(
+                    log_line,
+                    run_dir_str,
+                    "",
+                    "",
+                    gr.update(visible=False),
+                    "",
+                    run_dir_abs,
+                    metrics_state,
+                )
+                metrics_state = update[-1]
+                run_dir_abs = update[6]
+                yield update
                 values = _gather_adv_values(train_ui["adv_flat"], list(adv_values))
                 run_dir = _run_dir_path("train", run_name, create=False)
                 run_dir_str = str(run_dir)
@@ -1899,17 +2199,42 @@ def main() -> gr.Blocks:
                 LAST_TRAIN_RUN_DIR = run_dir_abs
                 if _run_dir_has_content(run_dir):
                     conflict_group, conflict_message = _show_conflict(run_dir)
-                    yield log, "", "", "", conflict_group, conflict_message, ""
+                    update = _emit_update(
+                        log_line,
+                        "",
+                        "",
+                        "",
+                        conflict_group,
+                        conflict_message,
+                        "",
+                        metrics_state,
+                    )
+                    metrics_state = update[-1]
+                    run_dir_abs = update[6]
+                    yield update
                     return
                 expected_path, existed, mtime_before = (None, False, None)
                 if adv_model_source == "Pretrained":
                     expected_path, existed, mtime_before = _model_cache_state(adv_pretrained_model)
                 if expected_path:
                     if existed:
-                        log = _append_log(log, "[status] Found cached model file, verifying checksum...")
+                        log_line = "[status] Found cached model file, verifying checksum..."
                     else:
-                        log = _append_log(log, "[status] Downloading model from GitHub release...")
-                    yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
+                        log_line = "[status] Downloading model from GitHub release..."
+                    print(log_line, flush=True)
+                    update = _emit_update(
+                        log_line,
+                        run_dir_str,
+                        "",
+                        "",
+                        gr.update(visible=False),
+                        "",
+                        run_dir_abs,
+                        metrics_state,
+                    )
+                    metrics_state = update[-1]
+                    run_dir_abs = update[6]
+                    yield update
                 start_time = time.time()
                 if adv_model_source == "Pretrained":
                     tracker = _ProgressTracker(progress)
@@ -1933,14 +2258,40 @@ def main() -> gr.Blocks:
                     while thread.is_alive():
                         msg = tracker.consume()
                         if msg:
-                            log = _append_log(log, f"[download] {msg}")
-                            yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
+                            log_line = f"[download] {msg}"
+                            print(log_line, flush=True)
+                            update = _emit_update(
+                                log_line,
+                                run_dir_str,
+                                "",
+                                "",
+                                gr.update(visible=False),
+                                "",
+                                run_dir_abs,
+                                metrics_state,
+                            )
+                            metrics_state = update[-1]
+                            run_dir_abs = update[6]
+                            yield update
                         time.sleep(0.2)
                     thread.join()
                     msg = tracker.flush()
                     if msg:
-                        log = _append_log(log, f"[download] {msg}")
-                        yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
+                        log_line = f"[download] {msg}"
+                        print(log_line, flush=True)
+                        update = _emit_update(
+                            log_line,
+                            run_dir_str,
+                            "",
+                            "",
+                            gr.update(visible=False),
+                            "",
+                            run_dir_abs,
+                            metrics_state,
+                        )
+                        metrics_state = update[-1]
+                        run_dir_abs = update[6]
+                        yield update
                     if error.get("exc"):
                         raise error["exc"]
                     model_path = result["path"]
@@ -1956,23 +2307,46 @@ def main() -> gr.Blocks:
                 if expected_path and not existed:
                     size_bytes = model_path.stat().st_size if model_path.exists() else 0
                     speed = _format_speed_mb(size_bytes, elapsed)
-                    log = _append_log(
-                        log,
-                        f"[status] Download complete: {_format_size_mb(size_bytes)} in {elapsed:.1f}s ({speed}).",
+                    log_line = f"[status] Download complete: {_format_size_mb(size_bytes)} in {elapsed:.1f}s ({speed})."
+                    print(log_line, flush=True)
+                    update = _emit_update(
+                        log_line,
+                        run_dir_str,
+                        "",
+                        "",
+                        gr.update(visible=False),
+                        "",
+                        run_dir_abs,
+                        metrics_state,
                     )
-                    yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
+                    metrics_state = update[-1]
+                    run_dir_abs = update[6]
+                    yield update
                 elif expected_path and existed:
                     mtime_after = model_path.stat().st_mtime if model_path.exists() else None
                     if mtime_before and mtime_after and mtime_after > mtime_before:
                         size_bytes = model_path.stat().st_size if model_path.exists() else 0
                         speed = _format_speed_mb(size_bytes, elapsed)
-                        log = _append_log(
-                            log,
-                            f"[status] Model updated after checksum check: {_format_size_mb(size_bytes)} in {elapsed:.1f}s ({speed}).",
+                        log_line = (
+                            f"[status] Model updated after checksum check: {_format_size_mb(size_bytes)} "
+                            f"in {elapsed:.1f}s ({speed})."
                         )
                     else:
-                        log = _append_log(log, "[status] Model cached, skip download.")
-                    yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
+                        log_line = "[status] Model cached, skip download."
+                    print(log_line, flush=True)
+                    update = _emit_update(
+                        log_line,
+                        run_dir_str,
+                        "",
+                        "",
+                        gr.update(visible=False),
+                        "",
+                        run_dir_abs,
+                        metrics_state,
+                    )
+                    metrics_state = update[-1]
+                    run_dir_abs = update[6]
+                    yield update
                 values["model"] = str(model_path)
                 if adv_data_path:
                     values["data"] = adv_data_path
@@ -1981,8 +2355,21 @@ def main() -> gr.Blocks:
                 values["name"] = run_dir.name
                 cmd, preview = build_command("detect", "train", values)
                 write_run_metadata(run_dir, values, preview)
-                log = _append_log(log, "[status] Launching process...")
-                yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
+                log_line = "[status] Launching process..."
+                print(log_line, flush=True)
+                update = _emit_update(
+                    log_line,
+                    run_dir_str,
+                    "",
+                    "",
+                    gr.update(visible=False),
+                    "",
+                    run_dir_abs,
+                    metrics_state,
+                )
+                metrics_state = update[-1]
+                run_dir_abs = update[6]
+                yield update
                 process = start_process(cmd)
                 print(f"[train-debug] run_dir={run_dir_str}", file=sys.stderr, flush=True)
                 print(
@@ -2009,27 +2396,62 @@ def main() -> gr.Blocks:
                             flush=True,
                         )
                         results_csv_logged = True
-                    log = _append_log_raw(log, _strip_ansi(line))
-                    yield log, run_dir_str, "", "", gr.update(visible=False), "", run_dir_abs
+                    clean_line = _strip_ansi(line)
+                    log_line = _latest_log_line(log_line, clean_line)
+                    print(line, end="" if line.endswith("\n") else "\n", flush=True)
+                    update = _emit_update(
+                        log_line,
+                        run_dir_str,
+                        "",
+                        "",
+                        gr.update(visible=False),
+                        "",
+                        run_dir_abs,
+                        metrics_state,
+                    )
+                    metrics_state = update[-1]
+                    run_dir_abs = update[6]
+                    yield update
                 best = run_dir / "weights" / "best.pt"
                 last = run_dir / "weights" / "last.pt"
-                yield (
-                    log,
+                update = _emit_update(
+                    log_line,
                     run_dir_str,
                     str(best) if best.exists() else "",
                     str(last) if last.exists() else "",
                     gr.update(visible=False),
                     "",
                     run_dir_abs,
+                    metrics_state,
                 )
+                metrics_state = update[-1]
+                run_dir_abs = update[6]
+                yield update
             except Exception as exc:
                 _log_exception("advanced train", exc)
-                log = _append_log(log, f"Error: {exc}")
-                yield log, "", "", "", gr.update(visible=False), "", ""
+                log_line = f"Error: {exc}"
+                print(log_line, flush=True)
+                update = _emit_update(
+                    log_line,
+                    "",
+                    "",
+                    "",
+                    gr.update(visible=False),
+                    "",
+                    "",
+                    metrics_state,
+                )
+                yield update
+
+        adv_train_start_inputs = adv_train_inputs + [
+            train_ui["view_range"],
+            train_ui["table_filter"],
+            train_metrics_state,
+        ]
 
         adv_train_event = train_ui["adv_start"].click(
             _run_adv_train,
-            inputs=adv_train_inputs,
+            inputs=adv_train_start_inputs,
             outputs=[
                 train_ui["adv_log"],
                 train_ui["adv_output_dir"],
@@ -2038,6 +2460,11 @@ def main() -> gr.Blocks:
                 train_ui["adv_conflict_group"],
                 train_ui["adv_conflict_message"],
                 train_run_state,
+                train_ui["loss_plot"],
+                train_ui["metric_plot"],
+                train_ui["lr_plot"],
+                train_ui["metrics_table"],
+                train_metrics_state,
             ],
         )
         train_ui["adv_stop"].click(
