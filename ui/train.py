@@ -175,7 +175,7 @@ def build_train_tab() -> Dict[str, Any]:
             with gr.Row():
                 start_btn = gr.Button("Start Training", elem_classes=["accent-btn"])
                 stop_btn = gr.Button("Stop", elem_classes=["secondary-btn"])
-            log_box = gr.Textbox(label="Training Logs", lines=18)
+            log_box = gr.HTML(label="Training Status")
             best_path = gr.Textbox(label="best.pt", interactive=False)
             last_path = gr.Textbox(label="last.pt", interactive=False)
             set_predict_btn = gr.Button("Set as Predict Model")
@@ -267,7 +267,7 @@ def build_train_tab() -> Dict[str, Any]:
             adv_flat, adv_grouped = _build_advanced_inputs()
             components["adv_flat"] = adv_flat
             components["adv_grouped"] = adv_grouped
-            adv_log = gr.Textbox(label="Training Logs", lines=18)
+            adv_log = gr.HTML(label="Training Status")
             adv_start = gr.Button("Start Training (Advanced)", elem_classes=["accent-btn"])
             adv_stop = gr.Button("Stop", elem_classes=["secondary-btn"])
             adv_output_dir = gr.Textbox(label="Output Directory", interactive=False)
@@ -314,10 +314,7 @@ def build_train_tab() -> Dict[str, Any]:
                     metric_plot = gr.Plot()
                 with gr.Tab("LR"):
                     lr_plot = gr.Plot()
-            with gr.Row():
-                table_filter = gr.Textbox(label="Search (rows/cols)", placeholder="search rows or cols=loss,map")
-                export_btn = gr.Button("Export CSV", elem_classes=["secondary-btn"])
-                export_file = gr.File(label="Download CSV", interactive=False)
+            table_filter = gr.State(value="")
             metrics_table = gr.Dataframe(label="Logs", interactive=False, wrap=True)
             components.update(
                 {
@@ -328,8 +325,6 @@ def build_train_tab() -> Dict[str, Any]:
                     "metric_plot": metric_plot,
                     "lr_plot": lr_plot,
                     "table_filter": table_filter,
-                    "export_btn": export_btn,
-                    "export_file": export_file,
                     "metrics_table": metrics_table,
                 }
             )

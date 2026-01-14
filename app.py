@@ -32,6 +32,8 @@ LAST_TRAIN_RUN_DIR: Optional[str] = None
 LAST_RESULTS_CSV: Optional[str] = None
 DEFAULT_CFG = default_cfg_dict()
 MAX_LOG_LINES = 2000
+ENABLE_DEBUG_MSG = False
+
 
 
 def _load_css() -> str:
@@ -466,6 +468,78 @@ def _latest_log_line(current: str, text: str) -> str:
         else:
             line_buf += token
     return line_buf
+
+
+def _is_progress_log(text: str) -> bool:
+    if not text:
+        return False
+    stripped = text.strip()
+    if not stripped:
+        return False
+    if re.match(r"^\d+/\d+", stripped):
+        return True
+    if "%" in stripped and "it/s" in stripped:
+        return True
+    return False
+
+
+def _select_ui_log_line(current: str, text: str) -> str:
+    candidate = _latest_log_line(current, text)
+    if not candidate.strip():
+        return current
+    if ENABLE_DEBUG_MSG:
+        return candidate
+    if _is_progress_log(candidate):
+        return candidate
+    return current
+
+
+def _render_train_status(
+    stage: str,
+    data_path: str,
+    epoch_current: Optional[int],
+    epoch_total: Optional[int],
+    metrics: Optional[List[Tuple[str, Optional[float]]]] = None,
+) -> str:
+    safe_stage = html.escape(stage or "Idle")
+    safe_data = html.escape(data_path or "Not set")
+    if epoch_current is not None and epoch_total:
+        pct = max(0, min(int(epoch_current / epoch_total * 100), 100))
+        epoch_text = f"{epoch_current}/{epoch_total}"
+    else:
+        pct = 0
+        epoch_text = "-"
+    metrics_html = ""
+    if metrics:
+        items = []
+        for label, value in metrics:
+            safe_label = html.escape(label)
+            value_text = f"{value:.4f}" if value is not None else "-"
+            items.append(
+                f"<div style='min-width:120px;'>"
+                f"<div style='color:#64748b;font-size:12px;'>{safe_label}</div>"
+                f"<div style='font-weight:600;'>{value_text}</div>"
+                f"</div>"
+            )
+        metrics_html = (
+            "<div style='display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;'>"
+            + "".join(items)
+            + "</div>"
+        )
+    return f"""
+    <div class="train-status-card" style="border:1px solid #e2e8f0;border-radius:12px;padding:12px 14px;">
+      <div style="font-weight:600;margin-bottom:6px;">Training Status</div>
+      <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+        <div><span style="color:#64748b;">Stage:</span> {safe_stage}</div>
+        <div><span style="color:#64748b;">Data:</span> {safe_data}</div>
+        <div><span style="color:#64748b;">Epoch:</span> {epoch_text}</div>
+      </div>
+      <div style="margin-top:8px;background:#e2e8f0;border-radius:999px;height:8px;overflow:hidden;">
+        <div style="height:100%;background:#10b981;width:{pct}%;"></div>
+      </div>
+      {metrics_html}
+    </div>
+    """
 
 
 
@@ -973,6 +1047,28 @@ def _render_kpis(df: pd.DataFrame) -> str:
     return f"<div class='kpi-grid'>{''.join(cards)}</div>"
 
 
+def _summarize_results(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
+    if df.empty:
+        return None
+    epoch_current = len(df)
+    metrics: List[Tuple[str, Optional[float]]] = []
+    for label, key in (
+        ("mAP50-95", "metrics/mAP50-95(B)"),
+        ("mAP50", "metrics/mAP50(B)"),
+        ("precision", "metrics/precision(B)"),
+        ("recall", "metrics/recall(B)"),
+        ("box loss", "train/box_loss"),
+    ):
+        col = _find_col(df, key)
+        value = None
+        if col and col in df.columns:
+            num = pd.to_numeric(df[col].iloc[-1], errors="coerce")
+            if pd.notna(num):
+                value = float(num)
+        metrics.append((label, value))
+    return {"epoch_current": epoch_current, "metrics": metrics}
+
+
 def _render_diag(df: pd.DataFrame) -> str:
     if df.empty or len(df) < 6:
         return ""
@@ -1086,33 +1182,6 @@ def main() -> gr.Blocks:
                 return _resolve_actual_run_dir(_resolve_local_path(raw))
             return None
 
-        def _export_results(
-            run_state: str,
-            output_dir: str,
-            adv_output_dir: str,
-            log_text: str,
-            adv_log_text: str,
-        ) -> Optional[str]:
-            resolved = _resolve_run_path(run_state, output_dir, adv_output_dir)
-            if not resolved:
-                resolved = _extract_save_dir(adv_log_text or log_text)
-            if not resolved:
-                return None
-            csv_path = _find_results_csv(resolved)
-            return str(csv_path) if csv_path else None
-
-        train_ui["export_btn"].click(
-            _export_results,
-            inputs=[
-                train_run_state,
-                train_ui["output_dir"],
-                train_ui["adv_output_dir"],
-                train_ui["log_box"],
-                train_ui["adv_log"],
-            ],
-            outputs=train_ui["export_file"],
-        )
-
         def _update_metrics(
             run_state,
             output_dir,
@@ -1124,6 +1193,8 @@ def main() -> gr.Blocks:
             state,
         ):
             def _debug_metrics(message: str) -> None:
+                if not ENABLE_DEBUG_MSG:
+                    return
                 last = state.get("debug_last")
                 if message != last:
                     print(f"[metrics-debug] {message}", file=sys.stderr, flush=True)
@@ -1141,6 +1212,7 @@ def main() -> gr.Blocks:
                     f"adv_output_dir={adv_output_dir!r} extracted={str(extracted) if extracted else None} "
                     f"last_run={LAST_TRAIN_RUN_DIR!r} last_csv={LAST_RESULTS_CSV!r}"
                 )
+                state["last_summary"] = None
                 empty_fig = _empty_plot("Select or start a run")
                 return (
                     empty_fig,
@@ -1156,6 +1228,7 @@ def main() -> gr.Blocks:
                     f"no_results_csv resolved={str(resolved)} exists={resolved.exists()} "
                     f"last_csv={LAST_RESULTS_CSV!r}"
                 )
+                state["last_summary"] = None
                 empty_fig = _empty_plot("Waiting for results.csv...")
                 return (
                     empty_fig,
@@ -1165,7 +1238,8 @@ def main() -> gr.Blocks:
                     state,
                     str(resolved),
                 )
-            print(f"[metrics-debug] csv_path={csv_path}", file=sys.stderr, flush=True)
+            if ENABLE_DEBUG_MSG:
+                print(f"[metrics-debug] csv_path={csv_path}", file=sys.stderr, flush=True)
             resolved = csv_path.parent
             if state.get("debug_path") != str(resolved):
                 _debug_metrics(f"resolved_path={str(resolved)} csv_path={str(csv_path)}")
@@ -1187,6 +1261,7 @@ def main() -> gr.Blocks:
             if df.empty:
                 file_size = csv_path.stat().st_size if csv_path.exists() else 0
                 _debug_metrics(f"results_empty path={str(csv_path)} size={file_size}")
+                state["last_summary"] = None
                 empty_fig = _empty_plot("Waiting for results.csv...")
                 return (
                     empty_fig,
@@ -1206,6 +1281,7 @@ def main() -> gr.Blocks:
                     run_state,
                 )
             state["last_rows"] = len(df)
+            state["last_summary"] = _summarize_results(df)
             cols_signature = tuple(df.columns)
             rows_count = len(df)
             if state.get("debug_rows") != rows_count or state.get("debug_cols") != cols_signature:
@@ -1276,16 +1352,17 @@ def main() -> gr.Blocks:
 
             if not df_smooth.empty:
                 last_row = df_smooth.tail(1).to_dict(orient="records")[0]
-                print(
-                    f"[metrics-debug] plot_input rows={len(df_smooth)} cols={list(df_smooth.columns)} last={last_row}",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                print(
-                    f"[metrics-debug] loss_series={loss_series} metric_series={metric_series} lr_series={lr_series}",
-                    file=sys.stderr,
-                    flush=True,
-                )
+                if ENABLE_DEBUG_MSG:
+                    print(
+                        f"[metrics-debug] plot_input rows={len(df_smooth)} cols={list(df_smooth.columns)} last={last_row}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    print(
+                        f"[metrics-debug] loss_series={loss_series} metric_series={metric_series} lr_series={lr_series}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
             loss_fig = _plot_series(df_smooth, "epoch", loss_series)
             metric_fig = _plot_series(df_smooth, "epoch", metric_series)
             lr_fig = _plot_series(df_smooth, "epoch", lr_series)
@@ -1630,7 +1707,12 @@ def main() -> gr.Blocks:
             metrics_state,
             progress=gr.Progress(),
         ):
-            log_line = ""
+            try:
+                total_epochs = int(epochs)
+            except (TypeError, ValueError):
+                total_epochs = None
+            status_html = _render_train_status("Idle", data_path, None, total_epochs)
+            status_stage = "Idle"
             run_dir = _run_dir_path("train", run_name, create=False)
             run_dir_str = str(run_dir)
             run_dir_abs = str(_resolve_local_path(run_dir_str))
@@ -1640,7 +1722,7 @@ def main() -> gr.Blocks:
                 metrics_state = metrics_state or {}
 
                 def _emit_update(
-                    log_line_value,
+                    status_html_value,
                     output_dir_value,
                     best_path_value,
                     last_path_value,
@@ -1660,14 +1742,23 @@ def main() -> gr.Blocks:
                         run_state_value,
                         output_dir_value,
                         "",
-                        log_line_value,
+                        "",
                         "",
                         view_range,
                         table_filter,
                         metrics_state_value,
                     )
+                    summary = metrics_state_value.get("last_summary") if isinstance(metrics_state_value, dict) else None
+                    if summary:
+                        status_html_value = _render_train_status(
+                            "Training",
+                            data_path,
+                            summary.get("epoch_current"),
+                            total_epochs,
+                            summary.get("metrics"),
+                        )
                     return (
-                        log_line_value,
+                        status_html_value,
                         output_dir_value,
                         best_path_value,
                         last_path_value,
@@ -1681,10 +1772,12 @@ def main() -> gr.Blocks:
                         metrics_state_value,
                     )
 
-                log_line = "[status] Resolving model..."
-                print(log_line, flush=True)
+                status_stage = "Resolving model"
+                status_line = "[status] Resolving model..."
+                print(status_line, flush=True)
+                status_html = _render_train_status(status_stage, data_path, None, total_epochs)
                 update = _emit_update(
-                    log_line,
+                    status_html,
                     run_dir_str,
                     "",
                     "",
@@ -1718,7 +1811,7 @@ def main() -> gr.Blocks:
                 if _run_dir_has_content(run_dir):
                     conflict_group, conflict_message = _show_conflict(run_dir)
                     update = _emit_update(
-                        log_line,
+                        status_html,
                         "",
                         "",
                         "",
@@ -1737,12 +1830,15 @@ def main() -> gr.Blocks:
                     expected_path, existed, mtime_before = _model_cache_state(pretrained_model)
                 if expected_path:
                     if existed:
-                        log_line = "[status] Found cached model file, verifying checksum..."
+                        status_stage = "Verifying model"
+                        status_line = "[status] Found cached model file, verifying checksum..."
                     else:
-                        log_line = "[status] Downloading model from GitHub release..."
-                    print(log_line, flush=True)
+                        status_stage = "Downloading model"
+                        status_line = "[status] Downloading model from GitHub release..."
+                    print(status_line, flush=True)
+                    status_html = _render_train_status(status_stage, data_path, None, total_epochs)
                     update = _emit_update(
-                        log_line,
+                        status_html,
                         run_dir_str,
                         "",
                         "",
@@ -1777,10 +1873,12 @@ def main() -> gr.Blocks:
                     while thread.is_alive():
                         msg = tracker.consume()
                         if msg:
-                            log_line = f"[download] {msg}"
-                            print(log_line, flush=True)
+                            status_stage = "Downloading model"
+                            status_line = f"[download] {msg}"
+                            print(status_line, flush=True)
+                            status_html = _render_train_status(status_stage, data_path, None, total_epochs)
                             update = _emit_update(
-                                log_line,
+                                status_html,
                                 run_dir_str,
                                 "",
                                 "",
@@ -1796,10 +1894,12 @@ def main() -> gr.Blocks:
                     thread.join()
                     msg = tracker.flush()
                     if msg:
-                        log_line = f"[download] {msg}"
-                        print(log_line, flush=True)
+                        status_stage = "Downloading model"
+                        status_line = f"[download] {msg}"
+                        print(status_line, flush=True)
+                        status_html = _render_train_status(status_stage, data_path, None, total_epochs)
                         update = _emit_update(
-                            log_line,
+                            status_html,
                             run_dir_str,
                             "",
                             "",
@@ -1826,10 +1926,12 @@ def main() -> gr.Blocks:
                 if expected_path and not existed:
                     size_bytes = model_path.stat().st_size if model_path.exists() else 0
                     speed = _format_speed_mb(size_bytes, elapsed)
-                    log_line = f"[status] Download complete: {_format_size_mb(size_bytes)} in {elapsed:.1f}s ({speed})."
-                    print(log_line, flush=True)
+                    status_stage = "Model ready"
+                    status_line = f"[status] Download complete: {_format_size_mb(size_bytes)} in {elapsed:.1f}s ({speed})."
+                    print(status_line, flush=True)
+                    status_html = _render_train_status(status_stage, data_path, None, total_epochs)
                     update = _emit_update(
-                        log_line,
+                        status_html,
                         run_dir_str,
                         "",
                         "",
@@ -1846,15 +1948,18 @@ def main() -> gr.Blocks:
                     if mtime_before and mtime_after and mtime_after > mtime_before:
                         size_bytes = model_path.stat().st_size if model_path.exists() else 0
                         speed = _format_speed_mb(size_bytes, elapsed)
-                        log_line = (
+                        status_stage = "Model updated"
+                        status_line = (
                             f"[status] Model updated after checksum check: {_format_size_mb(size_bytes)} "
                             f"in {elapsed:.1f}s ({speed})."
                         )
                     else:
-                        log_line = "[status] Model cached, skip download."
-                    print(log_line, flush=True)
+                        status_stage = "Model ready"
+                        status_line = "[status] Model cached, skip download."
+                    print(status_line, flush=True)
+                    status_html = _render_train_status(status_stage, data_path, None, total_epochs)
                     update = _emit_update(
-                        log_line,
+                        status_html,
                         run_dir_str,
                         "",
                         "",
@@ -1869,10 +1974,12 @@ def main() -> gr.Blocks:
                 args["model"] = str(model_path)
                 cmd, preview = build_command("detect", "train", args)
                 write_run_metadata(run_dir, args, preview)
-                log_line = "[status] Launching process..."
-                print(log_line, flush=True)
+                status_stage = "Starting training"
+                status_line = "[status] Launching process..."
+                print(status_line, flush=True)
+                status_html = _render_train_status(status_stage, data_path, None, total_epochs)
                 update = _emit_update(
-                    log_line,
+                    status_html,
                     run_dir_str,
                     "",
                     "",
@@ -1885,12 +1992,13 @@ def main() -> gr.Blocks:
                 run_dir_abs = update[6]
                 yield update
                 process = start_process(cmd)
-                print(f"[train-debug] run_dir={run_dir_str}", file=sys.stderr, flush=True)
-                print(
-                    f"[train-debug] results_csv={_resolve_local_path(run_dir_str) / 'results.csv'}",
-                    file=sys.stderr,
-                    flush=True,
-                )
+                if ENABLE_DEBUG_MSG:
+                    print(f"[train-debug] run_dir={run_dir_str}", file=sys.stderr, flush=True)
+                    print(
+                        f"[train-debug] results_csv={_resolve_local_path(run_dir_str) / 'results.csv'}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
                 results_csv_path = _resolve_local_path(run_dir_str) / "results.csv"
                 results_csv_logged = False
                 had_real_output = False
@@ -1904,17 +2012,16 @@ def main() -> gr.Blocks:
                     if not results_csv_logged and results_csv_path.exists():
                         global LAST_RESULTS_CSV
                         LAST_RESULTS_CSV = str(results_csv_path)
-                        print(
-                            f"[train-debug] results_csv_found={results_csv_path}",
-                            file=sys.stderr,
-                            flush=True,
-                        )
+                        if ENABLE_DEBUG_MSG:
+                            print(
+                                f"[train-debug] results_csv_found={results_csv_path}",
+                                file=sys.stderr,
+                                flush=True,
+                            )
                         results_csv_logged = True
-                    clean_line = _strip_ansi(line)
-                    log_line = _latest_log_line(log_line, clean_line)
                     print(line, end="" if line.endswith("\n") else "\n", flush=True)
                     update = _emit_update(
-                        log_line,
+                        status_html,
                         run_dir_str,
                         "",
                         "",
@@ -1929,7 +2036,7 @@ def main() -> gr.Blocks:
                 best = run_dir / "weights" / "best.pt"
                 last = run_dir / "weights" / "last.pt"
                 update = _emit_update(
-                    log_line,
+                    status_html,
                     run_dir_str,
                     str(best) if best.exists() else "",
                     str(last) if last.exists() else "",
@@ -1943,10 +2050,12 @@ def main() -> gr.Blocks:
                 yield update
             except Exception as exc:
                 _log_exception("basic train", exc)
-                log_line = f"Error: {exc}"
-                print(log_line, flush=True)
+                status_stage = "Error"
+                status_line = f"Error: {exc}"
+                print(status_line, flush=True)
+                status_html = _render_train_status(status_stage, data_path, None, total_epochs)
                 update = _emit_update(
-                    log_line,
+                    status_html,
                     "",
                     "",
                     "",
@@ -1984,7 +2093,7 @@ def main() -> gr.Blocks:
 
         def _stop_train():
             stop_process()
-            return "Stopped by user."
+            return _render_train_status("Stopped by user.", "", None, None)
 
         def _stop_predict():
             stop_process()
@@ -2085,6 +2194,10 @@ def main() -> gr.Blocks:
         ):
             try:
                 values = _gather_adv_values(train_ui["adv_flat"], list(adv_values))
+                try:
+                    total_epochs = int(values.get("epochs")) if values.get("epochs") is not None else None
+                except (TypeError, ValueError):
+                    total_epochs = None
                 args = _advanced_train_args(
                     adv_data_path,
                     adv_model_source,
@@ -2122,7 +2235,9 @@ def main() -> gr.Blocks:
             *adv_values,
             progress=gr.Progress(),
         ):
-            log_line = ""
+            total_epochs = None
+            status_html = _render_train_status("Idle", adv_data_path, None, total_epochs)
+            status_stage = "Idle"
             run_dir = _run_dir_path("train", run_name, create=False)
             run_dir_str = str(run_dir)
             run_dir_abs = str(_resolve_local_path(run_dir_str))
@@ -2136,7 +2251,7 @@ def main() -> gr.Blocks:
                 metrics_state = metrics_state or {}
 
                 def _emit_update(
-                    log_line_value,
+                    status_html_value,
                     adv_output_dir_value,
                     best_path_value,
                     last_path_value,
@@ -2157,13 +2272,22 @@ def main() -> gr.Blocks:
                         "",
                         adv_output_dir_value,
                         "",
-                        log_line_value,
+                        "",
                         view_range,
                         table_filter,
                         metrics_state_value,
                     )
+                    summary = metrics_state_value.get("last_summary") if isinstance(metrics_state_value, dict) else None
+                    if summary:
+                        status_html_value = _render_train_status(
+                            "Training",
+                            adv_data_path,
+                            summary.get("epoch_current"),
+                            total_epochs,
+                            summary.get("metrics"),
+                        )
                     return (
-                        log_line_value,
+                        status_html_value,
                         adv_output_dir_value,
                         best_path_value,
                         last_path_value,
@@ -2177,10 +2301,12 @@ def main() -> gr.Blocks:
                         metrics_state_value,
                     )
 
-                log_line = "[status] Resolving model..."
-                print(log_line, flush=True)
+                status_stage = "Resolving model"
+                status_line = "[status] Resolving model..."
+                print(status_line, flush=True)
+                status_html = _render_train_status(status_stage, adv_data_path, None, total_epochs)
                 update = _emit_update(
-                    log_line,
+                    status_html,
                     run_dir_str,
                     "",
                     "",
@@ -2200,7 +2326,7 @@ def main() -> gr.Blocks:
                 if _run_dir_has_content(run_dir):
                     conflict_group, conflict_message = _show_conflict(run_dir)
                     update = _emit_update(
-                        log_line,
+                        status_html,
                         "",
                         "",
                         "",
@@ -2218,12 +2344,15 @@ def main() -> gr.Blocks:
                     expected_path, existed, mtime_before = _model_cache_state(adv_pretrained_model)
                 if expected_path:
                     if existed:
-                        log_line = "[status] Found cached model file, verifying checksum..."
+                        status_stage = "Verifying model"
+                        status_line = "[status] Found cached model file, verifying checksum..."
                     else:
-                        log_line = "[status] Downloading model from GitHub release..."
-                    print(log_line, flush=True)
+                        status_stage = "Downloading model"
+                        status_line = "[status] Downloading model from GitHub release..."
+                    print(status_line, flush=True)
+                    status_html = _render_train_status(status_stage, adv_data_path, None, total_epochs)
                     update = _emit_update(
-                        log_line,
+                        status_html,
                         run_dir_str,
                         "",
                         "",
@@ -2258,10 +2387,12 @@ def main() -> gr.Blocks:
                     while thread.is_alive():
                         msg = tracker.consume()
                         if msg:
-                            log_line = f"[download] {msg}"
-                            print(log_line, flush=True)
+                            status_stage = "Downloading model"
+                            status_line = f"[download] {msg}"
+                            print(status_line, flush=True)
+                            status_html = _render_train_status(status_stage, adv_data_path, None, total_epochs)
                             update = _emit_update(
-                                log_line,
+                                status_html,
                                 run_dir_str,
                                 "",
                                 "",
@@ -2277,10 +2408,12 @@ def main() -> gr.Blocks:
                     thread.join()
                     msg = tracker.flush()
                     if msg:
-                        log_line = f"[download] {msg}"
-                        print(log_line, flush=True)
+                        status_stage = "Downloading model"
+                        status_line = f"[download] {msg}"
+                        print(status_line, flush=True)
+                        status_html = _render_train_status(status_stage, adv_data_path, None, total_epochs)
                         update = _emit_update(
-                            log_line,
+                            status_html,
                             run_dir_str,
                             "",
                             "",
@@ -2307,10 +2440,12 @@ def main() -> gr.Blocks:
                 if expected_path and not existed:
                     size_bytes = model_path.stat().st_size if model_path.exists() else 0
                     speed = _format_speed_mb(size_bytes, elapsed)
-                    log_line = f"[status] Download complete: {_format_size_mb(size_bytes)} in {elapsed:.1f}s ({speed})."
-                    print(log_line, flush=True)
+                    status_stage = "Model ready"
+                    status_line = f"[status] Download complete: {_format_size_mb(size_bytes)} in {elapsed:.1f}s ({speed})."
+                    print(status_line, flush=True)
+                    status_html = _render_train_status(status_stage, adv_data_path, None, total_epochs)
                     update = _emit_update(
-                        log_line,
+                        status_html,
                         run_dir_str,
                         "",
                         "",
@@ -2327,15 +2462,18 @@ def main() -> gr.Blocks:
                     if mtime_before and mtime_after and mtime_after > mtime_before:
                         size_bytes = model_path.stat().st_size if model_path.exists() else 0
                         speed = _format_speed_mb(size_bytes, elapsed)
-                        log_line = (
+                        status_stage = "Model updated"
+                        status_line = (
                             f"[status] Model updated after checksum check: {_format_size_mb(size_bytes)} "
                             f"in {elapsed:.1f}s ({speed})."
                         )
                     else:
-                        log_line = "[status] Model cached, skip download."
-                    print(log_line, flush=True)
+                        status_stage = "Model ready"
+                        status_line = "[status] Model cached, skip download."
+                    print(status_line, flush=True)
+                    status_html = _render_train_status(status_stage, adv_data_path, None, total_epochs)
                     update = _emit_update(
-                        log_line,
+                        status_html,
                         run_dir_str,
                         "",
                         "",
@@ -2355,10 +2493,12 @@ def main() -> gr.Blocks:
                 values["name"] = run_dir.name
                 cmd, preview = build_command("detect", "train", values)
                 write_run_metadata(run_dir, values, preview)
-                log_line = "[status] Launching process..."
-                print(log_line, flush=True)
+                status_stage = "Starting training"
+                status_line = "[status] Launching process..."
+                print(status_line, flush=True)
+                status_html = _render_train_status(status_stage, adv_data_path, None, total_epochs)
                 update = _emit_update(
-                    log_line,
+                    status_html,
                     run_dir_str,
                     "",
                     "",
@@ -2371,12 +2511,13 @@ def main() -> gr.Blocks:
                 run_dir_abs = update[6]
                 yield update
                 process = start_process(cmd)
-                print(f"[train-debug] run_dir={run_dir_str}", file=sys.stderr, flush=True)
-                print(
-                    f"[train-debug] results_csv={_resolve_local_path(run_dir_str) / 'results.csv'}",
-                    file=sys.stderr,
-                    flush=True,
-                )
+                if ENABLE_DEBUG_MSG:
+                    print(f"[train-debug] run_dir={run_dir_str}", file=sys.stderr, flush=True)
+                    print(
+                        f"[train-debug] results_csv={_resolve_local_path(run_dir_str) / 'results.csv'}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
                 results_csv_path = _resolve_local_path(run_dir_str) / "results.csv"
                 results_csv_logged = False
                 had_real_output = False
@@ -2390,17 +2531,16 @@ def main() -> gr.Blocks:
                     if not results_csv_logged and results_csv_path.exists():
                         global LAST_RESULTS_CSV
                         LAST_RESULTS_CSV = str(results_csv_path)
-                        print(
-                            f"[train-debug] results_csv_found={results_csv_path}",
-                            file=sys.stderr,
-                            flush=True,
-                        )
+                        if ENABLE_DEBUG_MSG:
+                            print(
+                                f"[train-debug] results_csv_found={results_csv_path}",
+                                file=sys.stderr,
+                                flush=True,
+                            )
                         results_csv_logged = True
-                    clean_line = _strip_ansi(line)
-                    log_line = _latest_log_line(log_line, clean_line)
                     print(line, end="" if line.endswith("\n") else "\n", flush=True)
                     update = _emit_update(
-                        log_line,
+                        status_html,
                         run_dir_str,
                         "",
                         "",
@@ -2415,7 +2555,7 @@ def main() -> gr.Blocks:
                 best = run_dir / "weights" / "best.pt"
                 last = run_dir / "weights" / "last.pt"
                 update = _emit_update(
-                    log_line,
+                    status_html,
                     run_dir_str,
                     str(best) if best.exists() else "",
                     str(last) if last.exists() else "",
@@ -2429,10 +2569,12 @@ def main() -> gr.Blocks:
                 yield update
             except Exception as exc:
                 _log_exception("advanced train", exc)
-                log_line = f"Error: {exc}"
-                print(log_line, flush=True)
+                status_stage = "Error"
+                status_line = f"Error: {exc}"
+                print(status_line, flush=True)
+                status_html = _render_train_status(status_stage, adv_data_path, None, total_epochs)
                 update = _emit_update(
-                    log_line,
+                    status_html,
                     "",
                     "",
                     "",
