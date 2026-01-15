@@ -3035,7 +3035,7 @@ def main() -> gr.Blocks:
         predict_ui["adv_stop"].click(_stop_predict, inputs=None, outputs=predict_ui["adv_status_html"])
 
         gr.HTML(
-            "<div class='app-footer'>WebUI developed by <a href='https://github.com/LeoWang0814' target='_blank'>LeoWang</a></div>"
+            "<div class='app-footer'>WebUI developed by <a href='https://github.com/LeoWang0814/yolov10-webui' target='_blank'>LeoWang</a></div>"
         )
 
     return demo
