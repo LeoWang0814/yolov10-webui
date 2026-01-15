@@ -97,12 +97,14 @@ def build_train_tab() -> Dict[str, Any]:
 
             with gr.Row():
                 epochs = gr.Number(label="Epochs", value=100, precision=0)
+                patience = gr.Number(label="Patience", value=50, precision=0)
                 imgsz = gr.Number(label="Image Size (imgsz)", value=640, precision=0)
                 batch = gr.Dropdown(label="Batch", choices=["auto", 1, 2, 4, 8, 16, 32, 64], value=16)
                 workers = gr.Number(label="Workers", value=8, precision=0)
             components.update(
                 {
                     "epochs": epochs,
+                    "patience": patience,
                     "imgsz": imgsz,
                     "batch": batch,
                     "workers": workers,

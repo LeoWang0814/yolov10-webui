@@ -36,6 +36,22 @@ h3 {
   padding: var(--pad-lg) var(--pad-lg);
 }
 
+.gradio-container .block,
+.gradio-container .gr-box,
+.gradio-container .gr-panel,
+.gradio-container .gr-group {
+  animation: none !important;
+}
+
+.gradio-container .block:focus-within,
+.gradio-container .gr-box:focus-within,
+.gradio-container .gr-panel:focus-within,
+.gradio-container .gr-group:focus-within {
+  box-shadow: var(--shadow) !important;
+  outline: none !important;
+  animation: none !important;
+}
+
 .app-hero {
   padding: 18px 22px;
   border-radius: 10px;

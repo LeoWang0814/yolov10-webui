@@ -1133,7 +1133,7 @@ def main() -> gr.Blocks:
         gr.HTML(
             """
             <div class="app-hero">
-              <h1>YOLOv10 WebUI</h1>
+              <h1>YOLOv10 WebUI v1.0.0</h1>
               <div class="subtle">Train and Predict with a fast, reproducible workflow.</div>
             </div>
             """
@@ -1646,6 +1646,7 @@ def main() -> gr.Blocks:
             pretrained_model,
             local_model,
             epochs,
+            patience,
             imgsz,
             batch,
             device_mode,
@@ -1662,6 +1663,7 @@ def main() -> gr.Blocks:
                 "data": data_path,
                 "model": str(model_path),
                 "epochs": int(epochs),
+                "patience": int(patience),
                 "imgsz": int(imgsz),
                 "batch": batch_value,
                 "device": device,
@@ -1688,6 +1690,7 @@ def main() -> gr.Blocks:
             train_ui["pretrained_model"],
             train_ui["local_model"],
             train_ui["epochs"],
+            train_ui["patience"],
             train_ui["imgsz"],
             train_ui["batch"],
             train_ui["device_mode"],
@@ -1706,6 +1709,7 @@ def main() -> gr.Blocks:
             pretrained_model,
             local_model,
             epochs,
+            patience,
             imgsz,
             batch,
             device_mode,
@@ -1808,6 +1812,7 @@ def main() -> gr.Blocks:
                     pretrained_model,
                     local_model,
                     epochs,
+                    patience,
                     imgsz,
                     batch,
                     device_mode,
