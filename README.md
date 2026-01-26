@@ -44,7 +44,7 @@ GUI inference example:
 如果你是第一次使用，**强烈建议先阅读完整图文教程**（包含环境配置、训练、推理与常见问题）：  
 If this is your first time using the WebUI, **we strongly recommend reading the full illustrated guide** (environment setup, training, inference, and FAQs):
 
-👉 https://blogs.blueberryowo.me/#/post/Computer%20Vision/yolov10-webui-train-infer
+👉 https://blogs.nanoberry.dev/#/post/Computer%20Vision/yolov10-webui-train-infer
 
 ---
 
